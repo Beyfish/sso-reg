@@ -151,7 +151,7 @@ python3 scripts/run_idp_codex.py --timeout 60 --export-targets none
 
 适用于公司域名已经接入 OpenAI ChatGPT Business SSO 的场景。这个模式不调用旧 IDP 服务，也不从 IDP 生成账号；流程从 Codex OAuth 开始，OpenAI 根据员工邮箱把授权请求路由到公司 SSO，然后脚本在公司 SSO 页面查找注册链接，提交公司员工注册表单，继续完成 Codex OAuth refresh token 获取，并按导出目标写入 Sub2API / CPA。
 
-开发模式会按 seed 生成本地测试员工资料，适合先验证表单识别和 artifact 输出：
+开发模式只会按 seed 生成本地测试员工资料；命令仍会向配置的公司 SSO 域名提交注册表单，并完成 Codex OAuth。请只在测试/非生产 SSO 域名使用，或使用明确可丢弃的测试账号：
 
 ```bash
 python3 scripts/run_company_sso_codex.py \
@@ -180,7 +180,7 @@ python3 scripts/run_company_sso_codex.py \
 - 只会在 `--sso-domain` 指定域名或其子域名上提交公司 SSO 注册/继续表单。
 - `employee.public.json` 不包含密码。
 - `employee.private.json` 和 `token.json` 包含密码、refresh token 等敏感信息，必须放在受控 artifact 目录。
-- 纯 HTTP 模式无法处理 captcha、MFA、WebAuthn 或复杂 JS；遇到这些页面会失败，并保存失败 HTML artifact 方便排查。
+- 纯 HTTP 模式无法处理 captcha、MFA、WebAuthn 或复杂 JS；未处理页面通常会保存 HTML artifact 方便排查，安全拒绝路径可能只返回 stage / URL 错误。
 
 ## 统一 TUI
 
