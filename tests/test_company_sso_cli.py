@@ -368,7 +368,35 @@ def test_redact_preserves_business_state_but_redacts_inline_oauth_state():
     assert redact("https://example.test/callback?state=raw_state&code=raw_code") == (
         "https://example.test/callback?state=***REDACTED***&code=***REDACTED***"
     )
+    assert redact("https://example.test/callback#state=raw_state&code=raw_code") == (
+        "https://example.test/callback#state=***REDACTED***&code=***REDACTED***"
+    )
     assert redact("state=raw_state") == "state=***REDACTED***"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "authorization: Bearer {token}",
+        "Authorization=Bearer {token}",
+        "{{'authorization': 'Bearer {token}'}}",
+        '{{"authorization":"Bearer {token}"}}',
+    ],
+)
+def test_redact_authorization_bearer_values(template):
+    raw_token = "abc.def-123"
+    redacted = redact(template.format(token=raw_token))
+
+    assert raw_token not in redacted
+    assert "***REDACTED***" in redacted
+
+
+def test_redact_cookie_line_with_spaces_and_semicolons():
+    redacted = redact("cookie: session=abc; other=def")
+
+    assert "abc" not in redacted
+    assert "def" not in redacted
+    assert "***REDACTED***" in redacted
 
 
 @pytest.mark.parametrize(
