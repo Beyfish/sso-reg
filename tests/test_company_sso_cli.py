@@ -364,10 +364,40 @@ def test_unexpected_error_redacts_json_dict_and_colon_secret_strings(monkeypatch
 
 def test_redact_preserves_business_state_but_redacts_inline_oauth_state():
     assert redact({"state": "healthy"}) == {"state": "healthy"}
+    assert redact({"status": "credentials_status.state=healthy"}) == {"status": "credentials_status.state=healthy"}
     assert redact("https://example.test/callback?state=raw_state&code=raw_code") == (
         "https://example.test/callback?state=***REDACTED***&code=***REDACTED***"
     )
     assert redact("state=raw_state") == "state=***REDACTED***"
+
+
+@pytest.mark.parametrize(
+    "key, secret",
+    [
+        ("management-key", "raw_management_dash"),
+        ("x-management-key", "raw_x_management"),
+        ("secret", "raw_secret"),
+        ("otp", "123456"),
+        ("access_token", "raw_access"),
+        ("refresh_token", "raw_refresh"),
+        ("password", "raw_password"),
+    ],
+)
+@pytest.mark.parametrize(
+    "template",
+    [
+        '{{"{key}":"{secret}"}}',
+        "{{'{key}': '{secret}'}}",
+        "{key}={secret}",
+        "{key}: {secret}",
+    ],
+)
+def test_redact_inline_secret_keys_match_structured_sensitive_keys(key, secret, template):
+    redacted = redact(template.format(key=key, secret=secret))
+
+    assert secret not in redacted
+    assert key in redacted
+    assert "***REDACTED***" in redacted
 
 
 def test_network_jsonl_redacts_oauth_url_secrets(monkeypatch, tmp_path, capsys):

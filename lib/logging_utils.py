@@ -28,19 +28,17 @@ SENSITIVE_MARKERS = (
     "otp",
 )
 
-INLINE_SECRET_KEYS = (
-    "access_token",
-    "refresh_token",
-    "id_token",
-    "token",
-    "password",
-    "authorization",
-    "cookie",
-    "code",
-    "state",
-    "cpa_management_key",
-    "management_key",
-)
+def _inline_key_variants() -> tuple[str, ...]:
+    variants: set[str] = set()
+    for marker in SENSITIVE_MARKERS:
+        key = marker.lower()
+        variants.add(key)
+        variants.add(key.replace("_", "-"))
+        variants.add(key.replace("-", "_"))
+    return tuple(sorted(variants, key=len, reverse=True))
+
+
+INLINE_SECRET_KEYS = _inline_key_variants()
 
 
 def utc_now_iso() -> str:
@@ -66,10 +64,11 @@ def redact(value: Any) -> Any:
         # Hide common inline secret patterns without destroying ordinary URLs.
         text = value
         keys = "|".join(re.escape(key) for key in INLINE_SECRET_KEYS)
-        text = re.sub(rf"(?i)\b({keys})\b(\s*=\s*)([\"'])(.*?)(\3)", r"\1\2\3***REDACTED***\3", text)
-        text = re.sub(rf"(?i)\b({keys})\b(\s*=\s*)([^&\s\"']+)", r"\1\2***REDACTED***", text)
-        text = re.sub(rf"(?i)([\"']?\b(?:{keys})\b[\"']?\s*:\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
-        text = re.sub(rf"(?i)([\"']?\b(?:{keys})\b[\"']?\s*:\s*)(?![\"'])([^,\s}}\]]+)", r"\1***REDACTED***", text)
+        key_token = rf"[A-Za-z0-9_.-]*(?:{keys})[A-Za-z0-9_.-]*"
+        text = re.sub(rf"(?i)([\"']?{key_token}[\"']?\s*[:=]\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
+        text = re.sub(rf"(?i)([\"']?{key_token}[\"']?\s*[:=]\s*)(?![\"'])([^,&\s}}\]]+)", r"\1***REDACTED***", text)
+        text = re.sub(r"(?i)((?:^|[\s?&])state\s*=\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
+        text = re.sub(r"(?i)((?:^|[\s?&])state\s*=\s*)([^&\s\"']+)", r"\1***REDACTED***", text)
         text = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1***REDACTED***", text)
         return text
     return value
