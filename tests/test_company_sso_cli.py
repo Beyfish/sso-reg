@@ -173,7 +173,8 @@ def test_dev_generate_requires_email_domain(tmp_path, capsys):
     )
 
     assert code == 1
-    payload = _parse_stderr_json(capsys.readouterr().err)
+    captured = capsys.readouterr()
+    payload = _parse_stderr_json(captured.err)
     assert payload["status"] == "failed"
     assert payload["stage"] == "config"
     assert payload["retryable"] is False
@@ -201,7 +202,8 @@ def test_explicit_employee_input_requires_email_and_password(args, message, tmp_
     )
 
     assert code == 1
-    payload = _parse_stderr_json(capsys.readouterr().err)
+    captured = capsys.readouterr()
+    payload = _parse_stderr_json(captured.err)
     assert payload["status"] == "failed"
     assert payload["stage"] == "config"
     assert message in payload["error"]
@@ -214,7 +216,7 @@ def test_idp_team_error_returns_redacted_stderr_json(monkeypatch, tmp_path, caps
 
         def authorize_codex(self, oauth, account):
             raise OAuthFlowError(
-                "authorization failed",
+                "authorization failed password=PlainPass123! token=raw_token_123 code=raw_code_123",
                 stage="company_sso_authorize",
                 retryable=True,
                 data={"email": account.email, "password": account.password},
@@ -238,8 +240,219 @@ def test_idp_team_error_returns_redacted_stderr_json(monkeypatch, tmp_path, caps
     )
 
     assert code == 1
-    payload = _parse_stderr_json(capsys.readouterr().err)
+    captured = capsys.readouterr()
+    payload = _parse_stderr_json(captured.err)
     assert payload["status"] == "failed"
     assert payload["stage"] == "company_sso_authorize"
     assert payload["retryable"] is True
+    assert "***REDACTED***" in payload["error"]
     assert payload["data"] == {"email": "jane.smith@company.test", "password": "***REDACTED***"}
+    assert "PlainPass123!" not in captured.err
+    assert "raw_token_123" not in captured.err
+    assert "raw_code_123" not in captured.err
+
+
+def test_unexpected_error_redacts_secret_in_stderr(monkeypatch, tmp_path, capsys):
+    class FakeFlow:
+        def __init__(self, **kwargs):
+            pass
+
+        def authorize_codex(self, oauth, account):
+            raise RuntimeError("boom password=PlainPass123! token=raw_token_123")
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+        ]
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    payload = _parse_stderr_json(captured.err)
+    assert payload["status"] == "failed"
+    assert payload["stage"] == "unexpected"
+    assert "***REDACTED***" in payload["error"]
+    assert "PlainPass123!" not in captured.err
+    assert "raw_token_123" not in captured.err
+
+
+def test_network_jsonl_redacts_oauth_url_secrets(monkeypatch, tmp_path, capsys):
+    class FakeFlow:
+        def __init__(self, *, logger, **kwargs):
+            self.logger = logger
+
+        def authorize_codex(self, oauth, account):
+            self.logger.write(
+                "flow_url",
+                {
+                    "url": "https://auth.example/callback?state=raw_state_123&code=raw_code_123&token=raw_token_123&password=raw_pw_123&authorization=raw_auth_123&cookie=raw_cookie_123"
+                },
+            )
+            return {
+                "type": "codex",
+                "email": account.email,
+                "account_id": "acct_log",
+                "user_id": "",
+                "access_token": "acc",
+                "refresh_token": "ref",
+                "id_token": "",
+                "client_id": oauth.client_id,
+            }
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+    monkeypatch.setattr(company_sso_cli, "_export_record", lambda *args, **kwargs: {})
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+        ]
+    )
+
+    assert code == 0
+    capsys.readouterr()
+    text = (tmp_path / "network.jsonl").read_text(encoding="utf-8")
+    assert "***REDACTED***" in text
+    assert "raw_state_123" not in text
+    assert "raw_code_123" not in text
+    assert "raw_token_123" not in text
+    assert "raw_pw_123" not in text
+    assert "raw_auth_123" not in text
+    assert "raw_cookie_123" not in text
+
+
+def test_runtime_config_preserves_export_env_overrides(monkeypatch, tmp_path):
+    artifact_dir = tmp_path / "env-artifacts"
+    monkeypatch.setenv("ARTIFACT_DIR", str(artifact_dir))
+    monkeypatch.setenv("SUB2API_CONCURRENCY", "17")
+    monkeypatch.setenv("SUB2API_PRIORITY", "3")
+    monkeypatch.setenv("SUB2API_RATE_MULTIPLIER", "2.5")
+    monkeypatch.setenv("CPA_PRIORITY", "4")
+
+    args = company_sso_cli.build_parser().parse_args(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--export-targets",
+            "none",
+        ]
+    )
+
+    cfg = company_sso_cli._runtime_config_from_args(args)
+
+    assert cfg.artifact_dir == artifact_dir
+    assert cfg.sub2api_concurrency == 17
+    assert cfg.sub2api_priority == 3
+    assert cfg.sub2api_rate_multiplier == 2.5
+    assert cfg.cpa_priority == 4
+
+
+def test_export_targets_dispatch_builds_company_source_record(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    class FakeFlow:
+        def __init__(self, **kwargs):
+            pass
+
+        def authorize_codex(self, oauth, account):
+            return {
+                "type": "codex",
+                "email": account.email,
+                "account_id": "acct_export",
+                "user_id": "user_export",
+                "access_token": "acc",
+                "refresh_token": "ref",
+                "id_token": "",
+                "client_id": oauth.client_id,
+            }
+
+    def fake_export(cfg, logger, record, *, progress=None):
+        calls.append(record)
+        return {"cpa": {"status": "success", "email": record.email}}
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+    monkeypatch.setattr(company_sso_cli, "_export_record", fake_export)
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "cpa",
+            "--cpa-url",
+            "https://cpa.example",
+            "--cpa-management-key",
+            "mgmt",
+        ]
+    )
+
+    assert code == 0
+    stdout, _captured = _parse_stdout_json(capsys)
+    assert stdout["exports"]["cpa"]["status"] == "success"
+    assert len(calls) == 1
+    record = calls[0]
+    assert record.email == "jane.smith@company.test"
+    assert record.secret["refresh_token"] == "ref"
+    assert record.metadata["source"] == "company_sso_codex"
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (["--email", "not-an-email", "--password", "InitPass123!"], "email"),
+        (["--email", "jane.smith@company.test", "--password", "InitPass123!", "--username", "  "], "username"),
+    ],
+)
+def test_explicit_employee_input_validates_email_and_username(monkeypatch, args, message, tmp_path, capsys):
+    class FakeFlow:
+        def __init__(self, **kwargs):
+            raise AssertionError("invalid employee input should fail before flow starts")
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+            *args,
+        ]
+    )
+
+    assert code == 1
+    payload = _parse_stderr_json(capsys.readouterr().err)
+    assert payload["status"] == "failed"
+    assert payload["stage"] == "config"
+    assert message in payload["error"]

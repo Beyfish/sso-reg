@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import urllib.parse
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,7 +18,7 @@ from .cli import _build_export_record, _export_record, _write_json
 from .codex_oauth import generate_oauth_start, public_token_result
 from .company_account import CompanyAccount, generate_dev_account
 from .company_sso_flow import CompanySSOHttpFlow
-from .config import PROJECT_ROOT, RuntimeConfig, env_first, load_dotenv, normalize_export_targets, parse_float
+from .config import PROJECT_ROOT, RuntimeConfig, env_first, load_dotenv, normalize_export_targets, parse_float, parse_int
 from .errors import ConfigError, IdpTeamAutomationError, OAuthFlowError
 from .logging_utils import JsonlLogger, redact, utc_now_iso
 
@@ -72,8 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_artifact_dir(value: str | None) -> Path:
-    raw = str(value or "").strip()
+def _resolve_artifact_dir(value: str | None, *, default: str = "") -> Path:
+    raw = str(value or default or "").strip()
     if not raw:
         return PROJECT_ROOT / "artifacts" / "company_sso_codex"
     path = Path(raw)
@@ -97,14 +98,27 @@ def _default_first_name(username: str) -> str:
     return letters[:1].upper() + letters[1:].lower()
 
 
+def _looks_like_email(value: str) -> bool:
+    if any(ch.isspace() for ch in value):
+        return False
+    local, sep, domain = value.partition("@")
+    return bool(local and sep and domain and "." in domain and not domain.startswith(".") and not domain.endswith("."))
+
+
 def _explicit_account_from_args(args: argparse.Namespace) -> CompanyAccount:
     email = str(args.email or "").strip()
     password = str(args.password or "")
     if not email:
         raise ConfigError("显式员工输入缺少 --email", stage="config")
+    if not _looks_like_email(email):
+        raise ConfigError("显式员工输入 --email 格式无效", stage="config")
     if not password:
         raise ConfigError("显式员工输入缺少 --password", stage="config")
+    if args.username is not None and not str(args.username).strip():
+        raise ConfigError("显式员工输入 --username 不能为空", stage="config")
     username = str(args.username or "").strip() or email.split("@", 1)[0].strip()
+    if not username:
+        raise ConfigError("显式员工输入 --username 不能为空", stage="config")
     first_name = str(args.first_name or "").strip() or _default_first_name(username)
     last_name = str(args.last_name or "").strip() or "Employee"
     return CompanyAccount(
@@ -140,6 +154,7 @@ def _runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
         raw_export_targets = env_first("EXPORT_TARGETS", default="")
     targets = normalize_export_targets(raw_export_targets or None, no_sub2api=bool(args.no_sub2api))
     proxy = "" if args.no_proxy else (args.proxy or env_first("HTTPS_PROXY", "HTTP_PROXY", default=""))
+    artifact_dir = _resolve_artifact_dir(args.artifact_dir, default=env_first("ARTIFACT_DIR", default=""))
     return RuntimeConfig(
         codex_client_id=args.codex_client_id or env_first("CODEX_CLIENT_ID", default="app_EMoamEEZ73f0CkXaXp7hrann"),
         codex_redirect_uri=args.codex_redirect_uri or env_first("CODEX_REDIRECT_URI", default="http://localhost:1455/auth/callback"),
@@ -149,11 +164,15 @@ def _runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
         sub2api_password=args.sub2api_password or env_first("SUB2API_PASSWORD"),
         sub2api_group=args.sub2api_group or env_first("SUB2API_GROUP"),
         sub2api_model_whitelist=args.model_whitelist or env_first("SUB2API_MODEL_WHITELIST"),
+        sub2api_concurrency=parse_int(env_first("SUB2API_CONCURRENCY", default="10"), 10, minimum=1),
+        sub2api_priority=parse_int(env_first("SUB2API_PRIORITY", default="1"), 1, minimum=1),
+        sub2api_rate_multiplier=parse_float(env_first("SUB2API_RATE_MULTIPLIER", default="1"), 1.0, minimum=0),
         export_targets=targets,
         cpa_url=args.cpa_url or env_first("CPA_URL"),
         cpa_management_key=args.cpa_management_key or env_first("CPA_MANAGEMENT_KEY"),
+        cpa_priority=parse_int(env_first("CPA_PRIORITY", default="1"), 1, minimum=1),
         cpa_note=args.cpa_note or env_first("CPA_NOTE", default="Idp Team Automation"),
-        artifact_dir=_resolve_artifact_dir(args.artifact_dir),
+        artifact_dir=artifact_dir,
         timeout=parse_float(args.timeout or env_first("REQUEST_TIMEOUT", default="30"), 30.0, minimum=1.0),
         proxy=proxy,
         export_sub2api="sub2api" in targets,
@@ -266,6 +285,7 @@ def run(cfg: RuntimeConfig, account: CompanyAccount, *, sso_domain: str, progres
     exports: dict[str, dict[str, Any]] = {}
     if cfg.selected_export_targets:
         record = _build_export_record(token_config, generated_account, cfg)
+        record = replace(record, metadata={**record.metadata, "source": "company_sso_codex"})
         exports = _export_record(cfg, logger, record, progress=progress)
     elif progress:
         progress("跳过导出", {"reason": "export_targets=none"})
@@ -286,11 +306,11 @@ def main(argv: list[str] | None = None) -> int:
         cfg = _runtime_config_from_args(args)
         result = run(cfg, account, sso_domain=str(args.sso_domain or ""))
     except IdpTeamAutomationError as exc:
-        payload = {"status": "failed", "stage": exc.stage, "error": str(exc), "retryable": exc.retryable, "data": redact(exc.data)}
+        payload = {"status": "failed", "stage": exc.stage, "error": redact(str(exc)), "retryable": exc.retryable, "data": redact(exc.data)}
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), file=sys.stderr)
         return 1
     except Exception as exc:
-        payload = {"status": "failed", "stage": "unexpected", "error": str(exc)}
+        payload = {"status": "failed", "stage": "unexpected", "error": redact(str(exc))}
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
