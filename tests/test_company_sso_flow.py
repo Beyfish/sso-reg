@@ -920,3 +920,51 @@ def test_company_sso_rejects_untrusted_location_redirect_before_registration(tmp
 
     assert excinfo.value.stage == "company_sso_register"
     assert not any(url.startswith("https://evil.example/") for _method, url, _kwargs in session.calls)
+
+
+def test_company_sso_omitted_action_login_with_register_submit_is_not_registration(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(
+                    200,
+                    "https://sso.company.test/login",
+                    {},
+                    '<form method="post">'
+                    '<input name="email">'
+                    '<input type="password" name="password">'
+                    '<button name="register" value="register">Register</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://sso.company.test/login":
+                raise AssertionError("omitted-action login form submitted before registration")
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice.zhang",
+        email="alice.zhang@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    with pytest.raises(OAuthFlowError):
+        flow.authorize_codex(oauth, account.to_generated_account())
+
+    assert not any(method == "POST" and url == "https://sso.company.test/login" for method, url, _kwargs in session.calls)

@@ -106,15 +106,14 @@ class CompanySSOHttpFlow(SSOHttpFlow):
                 return _absolute_url(response.url, link.href)
         return ""
 
-    def _form_has_register_semantics(self, form: HtmlForm) -> bool:
+    def _form_has_register_semantics(self, form: HtmlForm, effective_action: str) -> bool:
         field_names = {self._field_name(key) for key in form.fields}
         checkbox_names = {self._field_name(key) for key in form.checkbox_fields}
-        action = form.action
         submit = " ".join((form.submit_name, form.submit_value))
         has_strong_structure = self._has_confirm_password_field(field_names) or self._has_terms_checkbox(checkbox_names)
-        if self._looks_like_register_text(action):
+        if self._looks_like_register_text(effective_action):
             return True
-        if self._looks_like_login_text(action):
+        if self._looks_like_login_text(effective_action):
             return has_strong_structure
         if self._looks_like_register_text(submit):
             return True
@@ -208,7 +207,7 @@ class CompanySSOHttpFlow(SSOHttpFlow):
                     raise OAuthFlowError("公司 SSO 注册链接不在允许域名内", stage="company_sso_register")
                 return register_url
             forms, _links, _meta = parse_html_forms(response.text)
-            if any(self._form_register_score(form) > 0 for form in forms):
+            if any(self._form_register_score(form, response.url) > 0 for form in forms):
                 return ""
             redirected = self._script_or_meta_redirect(response)
             if redirected:
@@ -218,13 +217,14 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             return ""
         return super()._extract_script_or_meta_redirect(response)
 
-    def _form_register_score(self, form: HtmlForm) -> int:
-        if not self._form_has_register_semantics(form):
+    def _form_register_score(self, form: HtmlForm, current_url: str) -> int:
+        effective_action = _absolute_url(current_url, form.action or current_url)
+        if not self._form_has_register_semantics(form, effective_action):
             return 0
         field_names = {self._field_name(key) for key in form.fields}
         checkbox_names = {self._field_name(key) for key in form.checkbox_fields}
         keys = " ".join(list(field_names) + list(checkbox_names))
-        action = form.action.lower()
+        action = effective_action.lower()
         submit = " ".join((form.submit_name, form.submit_value)).lower()
         score = 1
         if self._looks_like_register_text(action):
@@ -286,8 +286,8 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         forms, _links, _meta = parse_html_forms(response.text)
         if not forms:
             return None
-        best = max(forms, key=self._form_register_score)
-        if self._form_register_score(best) <= 0:
+        best = max(forms, key=lambda form: self._form_register_score(form, response.url))
+        if self._form_register_score(best, response.url) <= 0:
             return None
         action = _absolute_url(response.url, best.action or response.url)
         if not self._is_company_sso_url(action):
