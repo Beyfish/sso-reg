@@ -94,7 +94,7 @@ class _FormParser(HTMLParser):
                     self._current.submit_value = value
             elif typ == "checkbox":
                 if attr.get("checked") is not None:
-                    self._current.fields[name] = value or "on"
+                    self._current.fields[name] = value
                 else:
                     self._current.checkbox_fields[name] = value or "on"
             elif typ == "radio":
@@ -133,14 +133,13 @@ class _FormParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if self._active_link_href:
-            text = html.unescape(data or "").strip()
-            if text:
-                self._active_link_text.append(text)
+            self._active_link_text.append(html.unescape(data or ""))
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if tag == "a" and self._active_link_href:
-            self.link_items.append(HtmlLink(self._active_link_href, " ".join(self._active_link_text).strip()))
+            text = re.sub(r"\s+", " ", "".join(self._active_link_text)).strip()
+            self.link_items.append(HtmlLink(self._active_link_href, text))
             self._active_link_href = ""
             self._active_link_text = []
         if tag == "select" and self._current is not None and self._select_name:

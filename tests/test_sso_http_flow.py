@@ -96,3 +96,52 @@ def test_parse_html_forms_captures_unchecked_checkbox_names():
     assert forms[0].fields["csrf"] == "abc"
     assert forms[0].fields["newsletter"] == "1"
     assert forms[0].checkbox_fields["terms"] == "yes"
+
+
+def test_parse_html_links_preserves_adjacent_nested_text():
+    links = parse_html_links('<a href="/x">Sign<strong>Up</strong></a>')
+
+    assert [(item.href, item.text) for item in links] == [("/x", "SignUp")]
+
+
+def test_parse_html_links_normalizes_whitespace():
+    links = parse_html_links('<a href="/x">Sign\n Up</a>')
+
+    assert [(item.href, item.text) for item in links] == [("/x", "Sign Up")]
+
+
+def test_parse_html_forms_defaults_unchecked_checkbox_missing_value_to_on():
+    forms, _links, _meta = parse_html_forms(
+        '<form><input type="checkbox" name="terms"></form>'
+    )
+
+    assert forms[0].checkbox_fields["terms"] == "on"
+
+
+def test_parse_html_forms_preserves_checked_checkbox_missing_value_as_empty():
+    forms, _links, _meta = parse_html_forms(
+        '<form><input type="checkbox" name="newsletter" checked></form>'
+    )
+
+    assert forms[0].fields["newsletter"] == ""
+
+
+def test_parse_html_forms_preserves_radio_checked_only():
+    forms, _links, _meta = parse_html_forms(
+        '<form>'
+        '<input type="radio" name="plan" value="basic">'
+        '<input type="radio" name="plan" value="pro" checked>'
+        "</form>"
+    )
+
+    assert forms[0].fields["plan"] == "pro"
+    assert forms[0].checkbox_fields == {}
+
+
+def test_parse_html_forms_returns_links_as_strings():
+    _forms, links, _meta = parse_html_forms(
+        '<html><body><a href="/login">Login</a><a href="/register">Register</a></body></html>'
+    )
+
+    assert links == ["/login", "/register"]
+    assert all(isinstance(item, str) for item in links)
