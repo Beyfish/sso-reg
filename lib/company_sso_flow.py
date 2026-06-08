@@ -111,11 +111,16 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         checkbox_names = {self._field_name(key) for key in form.checkbox_fields}
         action = form.action
         submit = " ".join((form.submit_name, form.submit_value))
-        if self._looks_like_register_text(action) or self._looks_like_register_text(submit):
+        has_strong_structure = self._has_confirm_password_field(field_names) or self._has_terms_checkbox(checkbox_names)
+        if self._looks_like_register_text(action):
             return True
-        if self._looks_like_login_text(action) or self._looks_like_login_text(submit):
+        if self._looks_like_login_text(action):
+            return has_strong_structure
+        if self._looks_like_register_text(submit):
+            return True
+        if self._looks_like_login_text(submit):
             return False
-        return self._has_confirm_password_field(field_names) or self._has_terms_checkbox(checkbox_names) or self._has_name_email_password_combo(field_names)
+        return has_strong_structure or self._has_name_email_password_combo(field_names)
 
     def _has_confirm_password_field(self, field_names: set[str]) -> bool:
         return bool(
@@ -181,6 +186,17 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             if match:
                 return _absolute_url(response.url, match.group(1))
         return ""
+
+    def _redirect_location(self, response: HttpResult) -> str:
+        location = super()._redirect_location(response)
+        if (
+            location
+            and not self._company_registration_submitted
+            and self._is_company_sso_url(response.url)
+            and not self._is_company_sso_url(location)
+        ):
+            raise OAuthFlowError("公司 SSO 注册前 HTTP 跳转不在允许域名内", stage="company_sso_register")
+        return location
 
     def _extract_script_or_meta_redirect(self, response: HttpResult) -> str:
         if not self._is_company_sso_url(response.url):
