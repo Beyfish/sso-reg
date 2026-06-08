@@ -68,6 +68,16 @@ class CompanySSOHttpFlow(SSOHttpFlow):
                 return _absolute_url(response.url, link.href)
         return ""
 
+    def _form_has_register_semantics(self, form: HtmlForm) -> bool:
+        keys = " ".join(list(form.fields) + list(form.checkbox_fields)).lower()
+        submit = " ".join((form.submit_name, form.submit_value)).lower()
+        return (
+            self._looks_like_register_text(form.action)
+            or self._looks_like_register_text(submit)
+            or any(marker in keys for marker in REGISTER_FIELD_MARKERS)
+            or any(marker in keys for marker in TERMS_MARKERS)
+        )
+
     def _script_or_meta_redirect(self, response: HttpResult) -> str:
         _forms, _links, meta = parse_html_forms(response.text)
         if meta:
@@ -99,10 +109,15 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         return super()._extract_script_or_meta_redirect(response)
 
     def _form_register_score(self, form: HtmlForm) -> int:
+        if not self._form_has_register_semantics(form):
+            return 0
         keys = " ".join(list(form.fields) + list(form.checkbox_fields)).lower()
         action = form.action.lower()
-        score = 0
+        submit = " ".join((form.submit_name, form.submit_value)).lower()
+        score = 1
         if self._looks_like_register_text(action):
+            score += 10
+        if self._looks_like_register_text(submit):
             score += 10
         if "email" in keys or "username" in keys:
             score += 3
