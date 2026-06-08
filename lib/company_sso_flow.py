@@ -6,7 +6,16 @@ from typing import Any
 
 from .errors import OAuthFlowError
 from .idp_client import GeneratedAccount
-from .sso_http_flow import HtmlForm, HttpResult, SSOHttpFlow, _absolute_url, parse_html_forms, parse_html_links
+from .sso_http_flow import (
+    HtmlForm,
+    HttpResult,
+    SSOHttpFlow,
+    _absolute_url,
+    _form_score,
+    parse_html_forms,
+    parse_html_links,
+    populate_account_form,
+)
 
 REGISTER_MARKERS = (
     "register",
@@ -160,6 +169,23 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             return self._request("GET", action + sep + urllib.parse.urlencode(data), headers={"Referer": response.url}, allow_redirects=False)
         return self._request("POST", action, headers={"Referer": response.url, "Content-Type": "application/x-www-form-urlencoded"}, data=data, allow_redirects=False)
 
+    def _submit_company_form(self, response: HttpResult, account: GeneratedAccount) -> HttpResult | None:
+        forms, _links, _meta = parse_html_forms(response.text)
+        if not forms:
+            return None
+        best = max(forms, key=_form_score)
+        if _form_score(best) <= 0:
+            return None
+        action = _absolute_url(response.url, best.action or response.url)
+        if not self._is_company_sso_url(action):
+            raise OAuthFlowError("公司 SSO 表单 action 不在允许域名内", stage="company_sso_continue")
+        data = populate_account_form(best, account, user_token=self.user_token)
+        method = (best.method or "GET").upper()
+        if method == "GET":
+            sep = "&" if urllib.parse.urlparse(action).query else "?"
+            return self._request("GET", action + sep + urllib.parse.urlencode(data), headers={"Referer": response.url}, allow_redirects=False)
+        return self._request("POST", action, headers={"Referer": response.url, "Content-Type": "application/x-www-form-urlencoded"}, data=data, allow_redirects=False)
+
     def _handle_custom_page(self, response: HttpResult, account: GeneratedAccount, stage: str) -> str | HttpResult | None:
         if not self._is_company_sso_url(response.url):
             forms, _links, _meta = parse_html_forms(response.text)
@@ -176,7 +202,7 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             if submitted is not None:
                 return submitted
             raise OAuthFlowError("公司 SSO 页面未找到注册链接或注册表单", stage="company_sso_register", data={"url": response.url})
-        submitted_login = self._submit_best_form(response, account)
+        submitted_login = self._submit_company_form(response, account)
         if submitted_login is not None:
             return submitted_login
         return None

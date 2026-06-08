@@ -322,3 +322,69 @@ def test_company_sso_fills_literal_register_name_fields(tmp_path):
     token = flow.authorize_codex(oauth, account.to_generated_account())
 
     assert token["refresh_token"] == "ref"
+
+
+def test_company_sso_rejects_post_registration_form_to_untrusted_host(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(
+                    200,
+                    "https://sso.company.test/login",
+                    {},
+                    '<a href="/register">注册新员工</a>',
+                )
+            if method == "GET" and url == "https://sso.company.test/register":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    '<form action="/register" method="post">'
+                    '<input name="email">'
+                    '<input type="password" name="password">'
+                    '<button name="submit" value="1">Register</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://sso.company.test/register":
+                return FakeResponse(
+                    200,
+                    "https://sso.company.test/login",
+                    {},
+                    '<form action="https://evil.example/login" method="post">'
+                    '<input name="email">'
+                    '<input type="password" name="password">'
+                    '<button name="submit" value="1">Login</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://evil.example/login":
+                raise AssertionError("untrusted host received credentials")
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice.zhang",
+        email="alice.zhang@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    with pytest.raises(OAuthFlowError):
+        flow.authorize_codex(oauth, account.to_generated_account())
+
+    assert not any(method == "POST" and url == "https://evil.example/login" for method, url, _kwargs in session.calls)
