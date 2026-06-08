@@ -22,7 +22,6 @@ REGISTER_MARKERS = (
     "signup",
     "sign-up",
     "sign_up",
-    "create",
     "create account",
     "create-account",
     "create_account",
@@ -36,6 +35,7 @@ CONFIRM_PASSWORD_FIELDS = ("confirm_password", "confirmpassword", "password_conf
 FIRST_NAME_FIELDS = ("first", "first_name", "firstname", "given", "given_name", "givenname")
 LAST_NAME_FIELDS = ("last", "last_name", "lastname", "family", "family_name", "familyname", "surname")
 EMPLOYEE_FIELDS = ("employee", "employee_id", "employeeid", "staff", "staff_id", "staffid")
+LOGIN_MARKERS = ("login", "log-in", "log_in", "sign in", "signin", "sign-in", "sign_in", "sso", "authenticate")
 TERMS_MARKERS = ("terms", "agree", "agreement", "accept", "privacy", "tos", "policy")
 SENSITIVE_GET_FIELD_NAMES = (
     "confirm",
@@ -45,8 +45,10 @@ SENSITIVE_GET_FIELD_NAMES = (
     "employee",
     "employee_id",
     "employeeid",
+    "identifier",
     "login",
     "mail",
+    "pass",
     "passwd",
     "password",
     "password_confirm",
@@ -62,7 +64,7 @@ SENSITIVE_GET_FIELD_NAMES = (
     "userid",
     "username",
 )
-SENSITIVE_GET_FIELD_TOKENS = ("confirm", "email", "employee", "login", "password", "staff", "token", "user")
+SENSITIVE_GET_FIELD_TOKENS = ("confirm", "email", "employee", "identifier", "login", "pass", "password", "staff", "token", "user")
 
 
 class CompanySSOHttpFlow(SSOHttpFlow):
@@ -94,6 +96,10 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         lowered = str(value or "").lower()
         return any(marker in lowered for marker in self.register_markers)
 
+    def _looks_like_login_text(self, value: str) -> bool:
+        lowered = str(value or "").lower()
+        return any(marker in lowered for marker in LOGIN_MARKERS)
+
     def _find_register_url(self, response: HttpResult) -> str:
         for link in parse_html_links(response.text):
             if self._looks_like_register_text(link.href) or self._looks_like_register_text(link.text):
@@ -103,14 +109,13 @@ class CompanySSOHttpFlow(SSOHttpFlow):
     def _form_has_register_semantics(self, form: HtmlForm) -> bool:
         field_names = {self._field_name(key) for key in form.fields}
         checkbox_names = {self._field_name(key) for key in form.checkbox_fields}
-        return (
-            self._looks_like_register_text(form.action)
-            or self._looks_like_register_text(" ".join((form.submit_name, form.submit_value)))
-            or self._has_confirm_password_field(field_names)
-            or self._has_terms_checkbox(checkbox_names)
-            or self._has_employee_field(field_names)
-            or self._has_name_pair(field_names)
-        )
+        action = form.action
+        submit = " ".join((form.submit_name, form.submit_value))
+        if self._looks_like_register_text(action) or self._looks_like_register_text(submit):
+            return True
+        if self._looks_like_login_text(action) or self._looks_like_login_text(submit):
+            return False
+        return self._has_confirm_password_field(field_names) or self._has_terms_checkbox(checkbox_names) or self._has_name_email_password_combo(field_names)
 
     def _has_confirm_password_field(self, field_names: set[str]) -> bool:
         return bool(
@@ -124,17 +129,42 @@ class CompanySSOHttpFlow(SSOHttpFlow):
     def _has_name_pair(self, field_names: set[str]) -> bool:
         return bool(field_names.intersection(FIRST_NAME_FIELDS) and field_names.intersection(LAST_NAME_FIELDS))
 
+    def _has_name_email_password_combo(self, field_names: set[str]) -> bool:
+        has_email = "email" in field_names or "mail" in field_names
+        has_password = bool(field_names.intersection({"password", "passwd", "pwd", "pass"}))
+        return bool(has_email and has_password and self._has_name_pair(field_names))
+
     def _has_terms_checkbox(self, checkbox_names: set[str]) -> bool:
         return any(marker in name for name in checkbox_names for marker in TERMS_MARKERS)
 
-    def _has_sensitive_get_data(self, data: dict[str, str]) -> bool:
+    def _account_sensitive_values(self, account: GeneratedAccount) -> tuple[str, ...]:
+        raw = account.raw if isinstance(account.raw, dict) else {}
+        values = [
+            account.email,
+            account.password,
+            self._account_extra(account, "username") or account.email.split("@", 1)[0],
+            self._account_extra(account, "employee_id"),
+            self._account_extra(account, "display_name") or account.name,
+            self._account_extra(account, "first_name") or account.given_name,
+            self._account_extra(account, "last_name") or account.family_name,
+            str(raw.get("user_token") or ""),
+            self.user_token,
+        ]
+        return tuple(str(value).strip() for value in values if str(value or "").strip())
+
+    def _has_sensitive_get_data(self, data: dict[str, str], account: GeneratedAccount) -> bool:
+        sensitive_values = self._account_sensitive_values(account)
         for key, value in data.items():
-            if not str(value or ""):
+            text_value = str(value or "")
+            if not text_value:
                 continue
             name = self._field_name(key)
             tokens = set(name.split("_"))
             if name in SENSITIVE_GET_FIELD_NAMES or tokens.intersection(SENSITIVE_GET_FIELD_TOKENS):
                 return True
+            for secret in sensitive_values:
+                if secret and (text_value == secret or secret in text_value):
+                    return True
         return False
 
     def _script_or_meta_redirect(self, response: HttpResult) -> str:
@@ -249,7 +279,7 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         data = self._fill_register_form(best, account)
         method = (best.method or "GET").upper()
         if method == "GET":
-            if self._has_sensitive_get_data(data):
+            if self._has_sensitive_get_data(data, account):
                 raise OAuthFlowError("公司 SSO 注册 GET 表单包含敏感字段，拒绝写入 URL", stage="company_sso_register")
             sep = "&" if urllib.parse.urlparse(action).query else "?"
             self._company_registration_submitted = True
@@ -270,7 +300,7 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         data = populate_account_form(best, account, user_token=self.user_token)
         method = (best.method or "GET").upper()
         if method == "GET":
-            if self._has_sensitive_get_data(data):
+            if self._has_sensitive_get_data(data, account):
                 raise OAuthFlowError("公司 SSO 后续 GET 表单包含敏感字段，拒绝写入 URL", stage="company_sso_continue")
             sep = "&" if urllib.parse.urlparse(action).query else "?"
             return self._request("GET", action + sep + urllib.parse.urlencode(data), headers={"Referer": response.url}, allow_redirects=False)

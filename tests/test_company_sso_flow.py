@@ -716,3 +716,115 @@ def test_company_sso_rejects_untrusted_register_link_on_company_page(tmp_path):
     assert excinfo.value.stage == "company_sso_register"
     assert "注册链接" in str(excinfo.value)
     assert not any(url.startswith("https://evil.example/") for _method, url, _kwargs in session.calls)
+
+
+def test_company_sso_rejects_get_continuation_identifier_pass_credentials(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(200, "https://sso.company.test/login", {}, '<a href="/register">注册新员工</a>')
+            if method == "GET" and url == "https://sso.company.test/register":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    '<form action="/register" method="post">'
+                    '<input name="email">'
+                    '<input type="password" name="password">'
+                    '<input type="password" name="confirm_password">'
+                    '<button name="submit" value="1">Register</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://sso.company.test/register":
+                return FakeResponse(
+                    200,
+                    "https://sso.company.test/login",
+                    {},
+                    '<form action="/login" method="get">'
+                    '<input name="identifier">'
+                    '<input type="password" name="pass">'
+                    '<button name="submit" value="1">Login</button>'
+                    "</form>",
+                )
+            if method == "GET" and url.startswith("https://sso.company.test/login?"):
+                raise AssertionError("GET continuation leaked identifier/pass credentials")
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice.zhang",
+        email="alice.zhang@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    with pytest.raises(OAuthFlowError) as excinfo:
+        flow.authorize_codex(oauth, account.to_generated_account())
+
+    assert excinfo.value.stage == "company_sso_continue"
+    assert not any(url.startswith("https://sso.company.test/login?") for _method, url, _kwargs in session.calls)
+
+
+def test_company_sso_does_not_submit_employee_id_login_form_before_registration(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(
+                    200,
+                    "https://sso.company.test/login",
+                    {},
+                    '<form action="/login" method="post">'
+                    '<input name="employee_id">'
+                    '<input type="password" name="password">'
+                    '<button name="submit" value="1">Login</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://sso.company.test/login":
+                raise AssertionError("employee_id login form submitted before registration")
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice.zhang",
+        email="alice.zhang@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+        employee_id="DEV123",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    with pytest.raises(OAuthFlowError):
+        flow.authorize_codex(oauth, account.to_generated_account())
+
+    assert not any(method == "POST" and url == "https://sso.company.test/login" for method, url, _kwargs in session.calls)
