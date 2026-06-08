@@ -65,9 +65,11 @@ def redact(value: Any) -> Any:
         text = value
         keys = "|".join(re.escape(key) for key in INLINE_SECRET_KEYS)
         key_token = rf"[A-Za-z0-9_.-]*(?:{keys})[A-Za-z0-9_.-]*"
-        text = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1***REDACTED***", text)
+        text = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._~+/\-]+=*", r"\1***REDACTED***", text)
         text = re.sub(r"(?i)([\"']?\bcookie\b[\"']?\s*:\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
         text = re.sub(r"(?i)([\"']?\bcookie\b[\"']?\s*:\s*)(?![\"'])([^\r\n}\]]+)", r"\1***REDACTED***", text)
+        text = re.sub(r"(?i)([\"']?\bcookie\b[\"']?\s*=\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
+        text = re.sub(r"(?i)([\"']?\bcookie\b[\"']?\s*=\s*)(?![\"'])([^\r\n}\]]+)", r"\1***REDACTED***", text)
         text = re.sub(rf"(?i)([\"']?{key_token}[\"']?\s*[:=]\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
         text = re.sub(rf"(?i)([\"']?{key_token}[\"']?\s*[:=]\s*)(?![\"'])([^,&\s}}\]]+)", r"\1***REDACTED***", text)
         text = re.sub(r"(?i)((?:^|[\s?#&])state\s*=\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
