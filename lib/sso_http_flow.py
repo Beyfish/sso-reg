@@ -52,8 +52,15 @@ class HtmlForm:
     action: str = ""
     method: str = "GET"
     fields: dict[str, str] = field(default_factory=dict)
+    checkbox_fields: dict[str, str] = field(default_factory=dict)
     submit_name: str = ""
     submit_value: str = ""
+
+
+@dataclass(frozen=True)
+class HtmlLink:
+    href: str
+    text: str = ""
 
 
 class _FormParser(HTMLParser):
@@ -65,6 +72,9 @@ class _FormParser(HTMLParser):
         self._select_first_value: str = ""
         self._select_selected_value: str = ""
         self.links: list[str] = []
+        self.link_items: list[HtmlLink] = []
+        self._active_link_href: str = ""
+        self._active_link_text: list[str] = []
         self.meta_refresh: str = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -82,7 +92,15 @@ class _FormParser(HTMLParser):
                 if not self._current.submit_name:
                     self._current.submit_name = name
                     self._current.submit_value = value
-            elif typ not in {"checkbox", "radio"} or attr.get("checked") is not None:
+            elif typ == "checkbox":
+                if attr.get("checked") is not None:
+                    self._current.fields[name] = value or "on"
+                else:
+                    self._current.checkbox_fields[name] = value or "on"
+            elif typ == "radio":
+                if attr.get("checked") is not None:
+                    self._current.fields[name] = value
+            else:
                 self._current.fields[name] = value
         elif tag == "button" and self._current is not None:
             name = html.unescape(attr.get("name", ""))
@@ -103,6 +121,8 @@ class _FormParser(HTMLParser):
             href = html.unescape(attr.get("href", ""))
             if href:
                 self.links.append(href)
+                self._active_link_href = href
+                self._active_link_text = []
         elif tag == "meta":
             equiv = attr.get("http-equiv", "").lower()
             content = attr.get("content", "")
@@ -111,8 +131,18 @@ class _FormParser(HTMLParser):
                 if m:
                     self.meta_refresh = html.unescape(m.group(1).strip().strip('"\''))
 
+    def handle_data(self, data: str) -> None:
+        if self._active_link_href:
+            text = html.unescape(data or "").strip()
+            if text:
+                self._active_link_text.append(text)
+
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if tag == "a" and self._active_link_href:
+            self.link_items.append(HtmlLink(self._active_link_href, " ".join(self._active_link_text).strip()))
+            self._active_link_href = ""
+            self._active_link_text = []
         if tag == "select" and self._current is not None and self._select_name:
             self._current.fields[self._select_name] = self._select_selected_value or self._select_first_value
             self._select_name = ""
@@ -134,6 +164,13 @@ def parse_html_forms(text: str) -> tuple[list[HtmlForm], list[str], str]:
     parser.feed(text or "")
     parser.close()
     return parser.forms, parser.links, parser.meta_refresh
+
+
+def parse_html_links(text: str) -> list[HtmlLink]:
+    parser = _FormParser()
+    parser.feed(text or "")
+    parser.close()
+    return parser.link_items
 
 
 def _looks_like_email_field(name: str) -> bool:

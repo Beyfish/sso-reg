@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from lib.codex_oauth import OAuthStart
 from lib.idp_client import GeneratedAccount
-from lib.sso_http_flow import SSOHttpFlow, parse_html_forms, populate_account_form
+from lib.sso_http_flow import SSOHttpFlow, parse_html_forms, parse_html_links, populate_account_form
 
 
 @dataclass
@@ -71,3 +71,28 @@ def test_sso_http_flow_mock_end_to_end(tmp_path):
     token = flow.run(start_url="https://idp.example/start", oauth=oauth, account=account)
     assert token["refresh_token"] == "ref"
     assert any(call[1] == "https://auth.openai.com/oauth/token" for call in session.calls)
+
+
+def test_parse_html_links_includes_visible_text():
+    links = parse_html_links(
+        '<html><body><a href="/login">Login</a><a href="/register"><span>注册新员工</span></a></body></html>'
+    )
+
+    assert [(item.href, item.text) for item in links] == [
+        ("/login", "Login"),
+        ("/register", "注册新员工"),
+    ]
+
+
+def test_parse_html_forms_captures_unchecked_checkbox_names():
+    forms, _links, _meta = parse_html_forms(
+        '<form action="/register" method="post">'
+        '<input type="hidden" name="csrf" value="abc">'
+        '<input type="checkbox" name="terms" value="yes">'
+        '<input type="checkbox" name="newsletter" value="1" checked>'
+        "</form>"
+    )
+
+    assert forms[0].fields["csrf"] == "abc"
+    assert forms[0].fields["newsletter"] == "1"
+    assert forms[0].checkbox_fields["terms"] == "yes"
