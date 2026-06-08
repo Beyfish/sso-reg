@@ -25,8 +25,21 @@ SENSITIVE_MARKERS = (
     "secret",
     "cookie",
     "code",
-    "state",
     "otp",
+)
+
+INLINE_SECRET_KEYS = (
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "token",
+    "password",
+    "authorization",
+    "cookie",
+    "code",
+    "state",
+    "cpa_management_key",
+    "management_key",
 )
 
 
@@ -52,7 +65,11 @@ def redact(value: Any) -> Any:
     if isinstance(value, str):
         # Hide common inline secret patterns without destroying ordinary URLs.
         text = value
-        text = re.sub(r"(?i)(access_token|refresh_token|id_token|token|password|authorization|cookie|code|state|cpa_management_key|management_key)=([^&\s]+)", r"\1=***REDACTED***", text)
+        keys = "|".join(re.escape(key) for key in INLINE_SECRET_KEYS)
+        text = re.sub(rf"(?i)\b({keys})\b(\s*=\s*)([\"'])(.*?)(\3)", r"\1\2\3***REDACTED***\3", text)
+        text = re.sub(rf"(?i)\b({keys})\b(\s*=\s*)([^&\s\"']+)", r"\1\2***REDACTED***", text)
+        text = re.sub(rf"(?i)([\"']?\b(?:{keys})\b[\"']?\s*:\s*)([\"'])(.*?)(\2)", r"\1\2***REDACTED***\2", text)
+        text = re.sub(rf"(?i)([\"']?\b(?:{keys})\b[\"']?\s*:\s*)(?![\"'])([^,\s}}\]]+)", r"\1***REDACTED***", text)
         text = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1***REDACTED***", text)
         return text
     return value

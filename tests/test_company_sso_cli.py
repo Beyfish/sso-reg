@@ -6,6 +6,7 @@ import pytest
 
 from lib import company_sso_cli
 from lib.errors import OAuthFlowError
+from lib.logging_utils import redact
 
 
 def _parse_stdout_json(capsys):
@@ -252,6 +253,44 @@ def test_idp_team_error_returns_redacted_stderr_json(monkeypatch, tmp_path, caps
     assert "raw_code_123" not in captured.err
 
 
+def test_idp_team_error_redacts_json_dict_and_colon_secret_strings(monkeypatch, tmp_path, capsys):
+    class FakeFlow:
+        def __init__(self, **kwargs):
+            pass
+
+        def authorize_codex(self, oauth, account):
+            raise OAuthFlowError(
+                '{"refresh_token":"raw_ref","password":"raw_pw"} {\'access_token\': \'raw_acc\'} authorization: raw_auth code: raw_code',
+                stage="company_sso_authorize",
+                retryable=False,
+            )
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+        ]
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    payload = _parse_stderr_json(captured.err)
+    assert payload["stage"] == "company_sso_authorize"
+    assert "***REDACTED***" in payload["error"]
+    for secret in ("raw_ref", "raw_pw", "raw_acc", "raw_auth", "raw_code"):
+        assert secret not in captured.err
+
+
 def test_unexpected_error_redacts_secret_in_stderr(monkeypatch, tmp_path, capsys):
     class FakeFlow:
         def __init__(self, **kwargs):
@@ -285,6 +324,50 @@ def test_unexpected_error_redacts_secret_in_stderr(monkeypatch, tmp_path, capsys
     assert "***REDACTED***" in payload["error"]
     assert "PlainPass123!" not in captured.err
     assert "raw_token_123" not in captured.err
+
+
+def test_unexpected_error_redacts_json_dict_and_colon_secret_strings(monkeypatch, tmp_path, capsys):
+    class FakeFlow:
+        def __init__(self, **kwargs):
+            pass
+
+        def authorize_codex(self, oauth, account):
+            raise RuntimeError(
+                '{"id_token":"raw_id"} {\'cpa_management_key\': \'raw_key\'} cookie: raw_cookie password: raw_pw'
+            )
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+        ]
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    payload = _parse_stderr_json(captured.err)
+    assert payload["stage"] == "unexpected"
+    assert "***REDACTED***" in payload["error"]
+    for secret in ("raw_id", "raw_key", "raw_cookie", "raw_pw"):
+        assert secret not in captured.err
+
+
+def test_redact_preserves_business_state_but_redacts_inline_oauth_state():
+    assert redact({"state": "healthy"}) == {"state": "healthy"}
+    assert redact("https://example.test/callback?state=raw_state&code=raw_code") == (
+        "https://example.test/callback?state=***REDACTED***&code=***REDACTED***"
+    )
+    assert redact("state=raw_state") == "state=***REDACTED***"
 
 
 def test_network_jsonl_redacts_oauth_url_secrets(monkeypatch, tmp_path, capsys):
