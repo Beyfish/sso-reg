@@ -191,6 +191,102 @@ def test_company_sso_does_not_submit_untrusted_login_form(tmp_path):
     assert not any(method == "POST" and url == "https://evil.example/login" for method, url, _kwargs in session.calls)
 
 
+def test_company_sso_allows_openai_identifier_page_before_company_registration(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(
+                    200,
+                    "https://auth.openai.com/log-in",
+                    {},
+                    '<form action="/log-in" method="post">'
+                    '<input name="email">'
+                    '<button name="submit" value="1">Continue</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://auth.openai.com/api/accounts/authorize/continue":
+                assert kwargs["json"]["username"]["value"] == "alice@company.test"
+                assert kwargs["json"]["username"]["kind"] == "email"
+                return FakeResponse(
+                    302,
+                    url,
+                    {"Location": "https://sso.company.test/login"},
+                )
+            if method == "GET" and url == "https://sso.company.test/login":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    '<a href="/register">注册新员工</a>',
+                )
+            if method == "GET" and url == "https://sso.company.test/register":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    '<form action="/register" method="post">'
+                    '<input name="email">'
+                    '<input type="password" name="password">'
+                    '<input type="password" name="confirm_password">'
+                    '<button name="submit" value="1">Register</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://sso.company.test/register":
+                body = kwargs["data"]
+                assert body["email"] == "alice@company.test"
+                assert body["password"] == "InitPass123!"
+                assert body["confirm_password"] == "InitPass123!"
+                return FakeResponse(
+                    302,
+                    url,
+                    {"Location": "http://localhost:1455/auth/callback?code=company_code&state=company_state"},
+                )
+            if url == "https://auth.openai.com/oauth/token":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    json.dumps({"access_token": "acc", "refresh_token": "ref", "id_token": "", "expires_in": 3600}),
+                    {"access_token": "acc", "refresh_token": "ref", "id_token": "", "expires_in": 3600},
+                )
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice",
+        email="alice@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    token = flow.authorize_codex(oauth, account.to_generated_account())
+
+    assert token["refresh_token"] == "ref"
+    assert any(
+        method == "POST"
+        and url == "https://auth.openai.com/api/accounts/authorize/continue"
+        and kwargs["json"]["username"]["value"] == "alice@company.test"
+        for method, url, kwargs in session.calls
+    )
+    assert not any(method == "POST" and url == "https://auth.openai.com/log-in" for method, url, _kwargs in session.calls)
+
+
 def test_company_sso_visits_register_before_login_link(tmp_path):
     class Session:
         def __init__(self):

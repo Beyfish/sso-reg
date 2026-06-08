@@ -37,6 +37,7 @@ LAST_NAME_FIELDS = ("last", "last_name", "lastname", "family", "family_name", "f
 EMPLOYEE_FIELDS = ("employee", "employee_id", "employeeid", "staff", "staff_id", "staffid")
 LOGIN_MARKERS = ("login", "log-in", "log_in", "sign in", "signin", "sign-in", "sign_in", "sso", "authenticate")
 TERMS_MARKERS = ("terms", "agree", "agreement", "accept", "privacy", "tos", "policy")
+OPENAI_IDENTIFIER_PATHS = frozenset(("/log-in", "/log-in-or-create-account"))
 SENSITIVE_GET_FIELD_NAMES = (
     "confirm",
     "confirm_password",
@@ -91,6 +92,10 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             return False
         host = self._normalized_host(url)
         return host == self.company_sso_domain or host.endswith("." + self.company_sso_domain)
+
+    def _is_openai_identifier_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        return parsed.netloc == "auth.openai.com" and parsed.path in OPENAI_IDENTIFIER_PATHS
 
     def _looks_like_register_text(self, value: str) -> bool:
         lowered = str(value or "").lower()
@@ -324,6 +329,8 @@ class CompanySSOHttpFlow(SSOHttpFlow):
 
     def _handle_custom_page(self, response: HttpResult, account: GeneratedAccount, stage: str) -> str | HttpResult | None:
         if not self._is_company_sso_url(response.url):
+            if account.email and self._is_openai_identifier_url(response.url):
+                return None
             forms, _links, _meta = parse_html_forms(response.text)
             if forms:
                 raise OAuthFlowError("公司 SSO 不会向非允许域名提交表单", stage="company_sso_register", data={"url": response.url})
