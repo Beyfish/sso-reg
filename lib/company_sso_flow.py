@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import urllib.parse
 from typing import Any
 
@@ -58,6 +59,36 @@ class CompanySSOHttpFlow(SSOHttpFlow):
                 return _absolute_url(response.url, link.href)
         return ""
 
+    def _script_or_meta_redirect(self, response: HttpResult) -> str:
+        _forms, _links, meta = parse_html_forms(response.text)
+        if meta:
+            return _absolute_url(response.url, meta)
+        patterns = (
+            r"location\.href\s*=\s*['\"]([^'\"]+)['\"]",
+            r"window\.location\s*=\s*['\"]([^'\"]+)['\"]",
+            r"window\.location\.replace\(['\"]([^'\"]+)['\"]\)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, response.text or "", re.I)
+            if match:
+                return _absolute_url(response.url, match.group(1))
+        return ""
+
+    def _extract_script_or_meta_redirect(self, response: HttpResult) -> str:
+        if not self._is_company_sso_url(response.url):
+            return super()._extract_script_or_meta_redirect(response)
+        redirected = self._script_or_meta_redirect(response)
+        if redirected:
+            return redirected
+        if not self._company_registration_submitted:
+            register_url = self._find_register_url(response)
+            if register_url:
+                if not self._is_company_sso_url(register_url):
+                    raise OAuthFlowError("公司 SSO 注册链接不在允许域名内", stage="company_sso_register")
+                return register_url
+            return ""
+        return super()._extract_script_or_meta_redirect(response)
+
     def _form_register_score(self, form: HtmlForm) -> int:
         keys = " ".join(list(form.fields) + list(form.checkbox_fields)).lower()
         action = form.action.lower()
@@ -95,13 +126,13 @@ class CompanySSOHttpFlow(SSOHttpFlow):
                 data[key] = account.password
             elif "password" in lowered or lowered in {"passwd", "pwd"}:
                 data[key] = account.password
-            elif lowered in {"first_name", "firstname", "given_name", "givenname", "given"}:
+            elif lowered in {"first_name", "firstname", "given_name", "givenname", "given", "first"}:
                 data[key] = first_name
-            elif lowered in {"last_name", "lastname", "family_name", "familyname", "surname"}:
+            elif lowered in {"last_name", "lastname", "family_name", "familyname", "surname", "last"}:
                 data[key] = last_name
-            elif lowered in {"display_name", "displayname", "full_name", "fullname", "name"}:
+            elif lowered in {"display_name", "displayname", "full_name", "fullname", "name", "display"}:
                 data[key] = display_name
-            elif lowered in {"employee_id", "employeeid", "staff_id", "staffid"}:
+            elif lowered in {"employee_id", "employeeid", "staff_id", "staffid", "employee"}:
                 data[key] = employee_id
         for key, value in form.checkbox_fields.items():
             lowered = key.lower()
@@ -131,6 +162,9 @@ class CompanySSOHttpFlow(SSOHttpFlow):
 
     def _handle_custom_page(self, response: HttpResult, account: GeneratedAccount, stage: str) -> str | HttpResult | None:
         if not self._is_company_sso_url(response.url):
+            forms, _links, _meta = parse_html_forms(response.text)
+            if forms:
+                raise OAuthFlowError("公司 SSO 不会向非允许域名提交表单", stage="company_sso_register", data={"url": response.url})
             return None
         if not self._company_registration_submitted:
             register_url = self._find_register_url(response)
