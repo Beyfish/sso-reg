@@ -287,6 +287,110 @@ def test_company_sso_allows_openai_identifier_page_before_company_registration(t
     assert not any(method == "POST" and url == "https://auth.openai.com/log-in" for method, url, _kwargs in session.calls)
 
 
+def test_company_sso_allows_openai_sso_selector_before_company_registration(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(
+                    200,
+                    "https://auth.openai.com/log-in",
+                    {},
+                    '<form action="/log-in" method="post">'
+                    '<input name="email">'
+                    '<button name="submit" value="1">Continue</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://auth.openai.com/api/accounts/authorize/continue":
+                assert kwargs["json"]["username"]["value"] == "alice@company.test"
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    json.dumps({"continue_url": "https://auth.openai.com/sso"}),
+                    {"continue_url": "https://auth.openai.com/sso"},
+                )
+            if method == "GET" and url == "https://auth.openai.com/sso":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    '<html><title>How do you want to log in? - OpenAI</title>'
+                    '<form action="/sso/select" method="post">'
+                    '<input type="hidden" name="connection" value="company">'
+                    '<button name="submit" value="sso">Continue with SSO</button>'
+                    "</form></html>",
+                )
+            if method == "POST" and url == "https://auth.openai.com/sso/select":
+                assert kwargs["data"]["connection"] == "company"
+                return FakeResponse(302, url, {"Location": "https://sso.company.test/login"})
+            if method == "GET" and url == "https://sso.company.test/login":
+                return FakeResponse(200, url, {}, '<a href="/register">注册新员工</a>')
+            if method == "GET" and url == "https://sso.company.test/register":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    '<form action="/register" method="post">'
+                    '<input name="email">'
+                    '<input type="password" name="password">'
+                    '<input type="password" name="confirm_password">'
+                    '<button name="submit" value="1">Register</button>'
+                    "</form>",
+                )
+            if method == "POST" and url == "https://sso.company.test/register":
+                body = kwargs["data"]
+                assert body["email"] == "alice@company.test"
+                assert body["password"] == "InitPass123!"
+                assert body["confirm_password"] == "InitPass123!"
+                return FakeResponse(
+                    302,
+                    url,
+                    {"Location": "http://localhost:1455/auth/callback?code=company_code&state=company_state"},
+                )
+            if url == "https://auth.openai.com/oauth/token":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    json.dumps({"access_token": "acc", "refresh_token": "ref", "id_token": "", "expires_in": 3600}),
+                    {"access_token": "acc", "refresh_token": "ref", "id_token": "", "expires_in": 3600},
+                )
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice",
+        email="alice@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    token = flow.authorize_codex(oauth, account.to_generated_account())
+
+    visited_urls = [url for _method, url, _kwargs in session.calls]
+    assert token["refresh_token"] == "ref"
+    assert "https://auth.openai.com/sso" in visited_urls
+    assert "https://sso.company.test/login" in visited_urls
+    assert any(method == "POST" and url == "https://auth.openai.com/sso/select" for method, url, _kwargs in session.calls)
+    assert any(method == "POST" and url == "https://sso.company.test/register" for method, url, _kwargs in session.calls)
+
+
 def test_company_sso_visits_register_before_login_link(tmp_path):
     class Session:
         def __init__(self):
