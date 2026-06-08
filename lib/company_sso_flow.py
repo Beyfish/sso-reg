@@ -38,6 +38,13 @@ EMPLOYEE_FIELDS = ("employee", "employee_id", "employeeid", "staff", "staff_id",
 LOGIN_MARKERS = ("login", "log-in", "log_in", "sign in", "signin", "sign-in", "sign_in", "sso", "authenticate")
 TERMS_MARKERS = ("terms", "agree", "agreement", "accept", "privacy", "tos", "policy")
 OPENAI_INTERMEDIATE_PATHS = frozenset(("/log-in", "/log-in-or-create-account", "/sso"))
+OPENAI_PHONE_REQUIRED_PATHS = frozenset(("/add-phone",))
+OPENAI_CODEX_CONSENT_PATH = "/sign-in-with-chatgpt/codex/consent"
+WORKOS_SSO_AUTHORIZE_HOST = "external.auth.openai.com"
+WORKOS_SSO_AUTHORIZE_PATH = "/sso/authorize"
+WORKOS_SAML_ACS_PATH_PREFIX = "/sso/saml/acs/"
+WORKOS_SIGNIN_CONSENT_PATH = "/sso/signin-consent"
+WORKOS_INTERSTITIAL_PATH = "/sso/interstitial"
 SENSITIVE_GET_FIELD_NAMES = (
     "confirm",
     "confirm_password",
@@ -74,6 +81,7 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         self.company_sso_domain = self._normalized_host(company_sso_domain)
         self.register_markers = tuple(marker.lower() for marker in register_markers)
         self._company_registration_submitted = False
+        self._workos_saml_hosts: set[str] = set()
 
     @staticmethod
     def _normalized_host(value: str) -> str:
@@ -91,11 +99,43 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         if not self.company_sso_domain:
             return False
         host = self._normalized_host(url)
-        return host == self.company_sso_domain or host.endswith("." + self.company_sso_domain)
+        return (
+            host == self.company_sso_domain
+            or host.endswith("." + self.company_sso_domain)
+            or host in self._workos_saml_hosts
+        )
 
     def _is_openai_intermediate_url(self, url: str) -> bool:
         parsed = urllib.parse.urlparse(str(url or ""))
         return parsed.netloc == "auth.openai.com" and parsed.path in OPENAI_INTERMEDIATE_PATHS
+
+    def _is_openai_phone_required_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        return parsed.netloc == "auth.openai.com" and parsed.path in OPENAI_PHONE_REQUIRED_PATHS
+
+    def _is_openai_codex_consent_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        return parsed.netloc == "auth.openai.com" and parsed.path == OPENAI_CODEX_CONSENT_PATH
+
+    def _is_workos_sso_authorize_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        host = str(parsed.hostname or "").strip().lower().rstrip(".")
+        return host == WORKOS_SSO_AUTHORIZE_HOST and parsed.path == WORKOS_SSO_AUTHORIZE_PATH
+
+    def _is_workos_saml_acs_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        host = str(parsed.hostname or "").strip().lower().rstrip(".")
+        return host == WORKOS_SSO_AUTHORIZE_HOST and parsed.path.startswith(WORKOS_SAML_ACS_PATH_PREFIX)
+
+    def _is_workos_signin_consent_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        host = str(parsed.hostname or "").strip().lower().rstrip(".")
+        return host == WORKOS_SSO_AUTHORIZE_HOST and parsed.path == WORKOS_SIGNIN_CONSENT_PATH
+
+    def _is_workos_interstitial_url(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        host = str(parsed.hostname or "").strip().lower().rstrip(".")
+        return host == WORKOS_SSO_AUTHORIZE_HOST and parsed.path == WORKOS_INTERSTITIAL_PATH
 
     def _looks_like_register_text(self, value: str) -> bool:
         lowered = str(value or "").lower()
@@ -146,6 +186,31 @@ class CompanySSOHttpFlow(SSOHttpFlow):
     def _has_terms_checkbox(self, checkbox_names: set[str]) -> bool:
         return any(marker in name for name in checkbox_names for marker in TERMS_MARKERS)
 
+    def _is_workos_saml_host_url(self, url: str) -> bool:
+        host = self._normalized_host(url)
+        return bool(host and host in self._workos_saml_hosts)
+
+    def _form_has_saml_context(self, form: HtmlForm) -> bool:
+        field_names = {self._field_name(key) for key in form.fields}
+        return "samlrequest" in field_names and "relaystate" in field_names
+
+    def _form_has_saml_response(self, form: HtmlForm) -> bool:
+        field_names = {self._field_name(key) for key in form.fields}
+        return "samlresponse" in field_names
+
+    def _form_has_workos_signin_confirm(self, form: HtmlForm) -> bool:
+        field_names = {self._field_name(key) for key in form.fields}
+        action_value = ""
+        for key, value in form.fields.items():
+            if self._field_name(key) == "action":
+                action_value = str(value or "").strip().lower()
+                break
+        return bool({"interstitial_token", "csrf_token", "action"}.issubset(field_names) and action_value == "confirm")
+
+    def _form_has_openai_codex_consent(self, form: HtmlForm) -> bool:
+        field_names = {self._field_name(key) for key in form.fields}
+        return field_names == {"workspace_id"} and bool(str(next(iter(form.fields.values()), "") or "").strip())
+
     def _account_sensitive_values(self, account: GeneratedAccount) -> tuple[str, ...]:
         raw = account.raw if isinstance(account.raw, dict) else {}
         values = [
@@ -193,6 +258,10 @@ class CompanySSOHttpFlow(SSOHttpFlow):
 
     def _redirect_location(self, response: HttpResult) -> str:
         location = super()._redirect_location(response)
+        if location and self._is_workos_sso_authorize_url(response.url):
+            host = self._normalized_host(location)
+            if host:
+                self._workos_saml_hosts.add(host)
         if (
             location
             and not self._company_registration_submitted
@@ -287,6 +356,22 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             data.setdefault(form.submit_name, form.submit_value)
         return data
 
+    def _fill_workos_saml_form(self, form: HtmlForm, account: GeneratedAccount) -> dict[str, str]:
+        data = dict(form.fields)
+        username = self._account_extra(account, "username") or account.email.split("@", 1)[0]
+        employee_id = self._account_extra(account, "employee_id") or username
+        for key in list(data):
+            lowered = self._field_name(key)
+            if lowered in {"email", "mail"}:
+                data[key] = account.email
+            elif lowered in {"userid", "user_id", "employee", "employee_id", "employeeid", "staff", "staff_id", "staffid"}:
+                data[key] = employee_id
+            elif lowered in {"username", "user_name", "login"}:
+                data[key] = username
+        if form.submit_name:
+            data.setdefault(form.submit_name, form.submit_value)
+        return data
+
     def _submit_register_form(self, response: HttpResult, account: GeneratedAccount) -> HttpResult | None:
         forms, _links, _meta = parse_html_forms(response.text)
         if not forms:
@@ -307,6 +392,103 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             return self._request("GET", action + sep + urllib.parse.urlencode(data), headers={"Referer": response.url}, allow_redirects=False)
         self._company_registration_submitted = True
         return self._request("POST", action, headers={"Referer": response.url, "Content-Type": "application/x-www-form-urlencoded"}, data=data, allow_redirects=False)
+
+    def _submit_workos_saml_form(self, response: HttpResult, account: GeneratedAccount) -> HttpResult | None:
+        if not self._is_workos_saml_host_url(response.url):
+            return None
+        forms, _links, _meta = parse_html_forms(response.text)
+        forms = [form for form in forms if self._form_has_saml_context(form)]
+        if not forms:
+            return None
+        best = max(forms, key=_form_score)
+        action = _absolute_url(response.url, best.action or response.url)
+        if not self._is_company_sso_url(action):
+            raise OAuthFlowError("公司 SSO SAML 表单 action 不在允许域名内", stage="company_sso_register")
+        if any("password" in self._field_name(key) or self._field_name(key) in {"passwd", "pwd"} for key in best.fields):
+            raise OAuthFlowError("公司 SSO 注册前拒绝提交带密码的 SAML 登录表单", stage="company_sso_register")
+        data = self._fill_workos_saml_form(best, account)
+        method = (best.method or "GET").upper()
+        if method == "GET":
+            if self._has_sensitive_get_data(data, account):
+                raise OAuthFlowError("公司 SSO SAML GET 表单包含敏感字段，拒绝写入 URL", stage="company_sso_register")
+            sep = "&" if urllib.parse.urlparse(action).query else "?"
+            self._company_registration_submitted = True
+            return self._request("GET", action + sep + urllib.parse.urlencode(data), headers={"Referer": response.url}, allow_redirects=False)
+        self._company_registration_submitted = True
+        return self._request("POST", action, headers={"Referer": response.url, "Content-Type": "application/x-www-form-urlencoded"}, data=data, allow_redirects=False)
+
+    def _submit_workos_saml_response_form(self, response: HttpResult) -> HttpResult | None:
+        if not self._is_workos_saml_host_url(response.url):
+            return None
+        forms, _links, _meta = parse_html_forms(response.text)
+        forms = [form for form in forms if self._form_has_saml_response(form)]
+        if not forms:
+            return None
+        best = forms[0]
+        action = _absolute_url(response.url, best.action or response.url)
+        if not self._is_workos_saml_acs_url(action):
+            raise OAuthFlowError("公司 SSO SAMLResponse 表单 action 不是 WorkOS ACS", stage="company_sso_continue")
+        method = (best.method or "GET").upper()
+        if method != "POST":
+            raise OAuthFlowError("公司 SSO SAMLResponse 表单必须使用 POST", stage="company_sso_continue")
+        data = dict(best.fields)
+        if best.submit_name:
+            data.setdefault(best.submit_name, best.submit_value)
+        return self._request("POST", action, headers={"Referer": response.url, "Content-Type": "application/x-www-form-urlencoded"}, data=data, allow_redirects=False)
+
+    def _submit_workos_signin_consent_form(self, response: HttpResult) -> HttpResult | None:
+        if not self._company_registration_submitted or not self._is_workos_signin_consent_url(response.url):
+            return None
+        forms, _links, _meta = parse_html_forms(response.text)
+        forms = [form for form in forms if self._form_has_workos_signin_confirm(form)]
+        if not forms:
+            return None
+        best = forms[0]
+        action = _absolute_url(response.url, best.action or response.url)
+        if not self._is_workos_interstitial_url(action):
+            raise OAuthFlowError("公司 SSO WorkOS 确认表单 action 不是 signin interstitial", stage="company_sso_continue")
+        method = (best.method or "GET").upper()
+        if method != "POST":
+            raise OAuthFlowError("公司 SSO WorkOS 确认表单必须使用 POST", stage="company_sso_continue")
+        return self._request(
+            "POST",
+            action,
+            headers={
+                "Referer": response.url,
+                "Origin": f"https://{WORKOS_SSO_AUTHORIZE_HOST}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data=dict(best.fields),
+            allow_redirects=False,
+        )
+
+    def _submit_openai_codex_consent_form(self, response: HttpResult) -> HttpResult | None:
+        if not self._company_registration_submitted or not self._is_openai_codex_consent_url(response.url):
+            return None
+        forms, _links, _meta = parse_html_forms(response.text)
+        forms = [form for form in forms if self._form_has_openai_codex_consent(form)]
+        if not forms:
+            return None
+        best = forms[0]
+        action = _absolute_url(response.url, best.action or response.url)
+        if not self._is_openai_codex_consent_url(action):
+            raise OAuthFlowError("OpenAI Codex 授权表单 action 不匹配", stage="codex_consent")
+        method = (best.method or "GET").upper()
+        if method != "POST":
+            raise OAuthFlowError("OpenAI Codex 授权表单必须使用 POST", stage="codex_consent")
+        workspace_id = str(next(iter(best.fields.values()), "") or "").strip()
+        return self._request(
+            "POST",
+            "https://auth.openai.com/api/accounts/workspace/select",
+            headers={
+                "accept": "application/json",
+                "content-type": "application/json",
+                "Referer": response.url,
+                "Origin": "https://auth.openai.com",
+            },
+            json_body={"workspace_id": workspace_id},
+            allow_redirects=False,
+        )
 
     def _submit_company_form(self, response: HttpResult, account: GeneratedAccount) -> HttpResult | None:
         forms, _links, _meta = parse_html_forms(response.text)
@@ -331,6 +513,19 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         if not self._is_company_sso_url(response.url):
             if account.email and self._is_openai_intermediate_url(response.url):
                 return None
+            if self._is_openai_phone_required_url(response.url):
+                path = self._save_html("openai_phone_required.html", response)
+                raise OAuthFlowError(
+                    "OpenAI 要求绑定手机号，纯 HTTP 流程无法继续",
+                    stage="openai_phone_required",
+                    data={"url": response.url, "artifact": str(path)},
+                )
+            submitted_signin_consent = self._submit_workos_signin_consent_form(response)
+            if submitted_signin_consent is not None:
+                return submitted_signin_consent
+            submitted_codex_consent = self._submit_openai_codex_consent_form(response)
+            if submitted_codex_consent is not None:
+                return submitted_codex_consent
             forms, _links, _meta = parse_html_forms(response.text)
             if forms:
                 raise OAuthFlowError("公司 SSO 不会向非允许域名提交表单", stage="company_sso_register", data={"url": response.url})
@@ -344,7 +539,13 @@ class CompanySSOHttpFlow(SSOHttpFlow):
             submitted = self._submit_register_form(response, account)
             if submitted is not None:
                 return submitted
+            submitted_saml = self._submit_workos_saml_form(response, account)
+            if submitted_saml is not None:
+                return submitted_saml
             raise OAuthFlowError("公司 SSO 页面未找到注册链接或注册表单", stage="company_sso_register", data={"url": response.url})
+        submitted_saml_response = self._submit_workos_saml_response_form(response)
+        if submitted_saml_response is not None:
+            return submitted_saml_response
         submitted_login = self._submit_company_form(response, account)
         if submitted_login is not None:
             return submitted_login

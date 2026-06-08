@@ -452,6 +452,49 @@ class SSOHttpFlow:
             allow_redirects=False,
         )
 
+    def _openai_sso_connection_payload(self, response: HttpResult) -> dict[str, Any] | None:
+        parsed = urllib.parse.urlparse(response.url)
+        if parsed.netloc != "auth.openai.com" or parsed.path != "/sso":
+            return None
+        forms, _links, _meta = parse_html_forms(response.text)
+        for form in forms:
+            raw = str(form.fields.get("ssoConnection") or "").strip()
+            if not raw and form.submit_name == "ssoConnection":
+                raw = str(form.submit_value or "").strip()
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise OAuthFlowError("OpenAI SSO 选择页包含无法解析的 ssoConnection", stage="openai_sso_selector") from exc
+            if not isinstance(data, dict):
+                raise OAuthFlowError("OpenAI SSO 选择页 ssoConnection 格式不正确", stage="openai_sso_selector")
+            connection = str(data.get("connection_name") or "").strip()
+            if not connection:
+                raise OAuthFlowError("OpenAI SSO 选择页缺少 connection_name", stage="openai_sso_selector")
+            payload: dict[str, Any] = {"connection": connection}
+            if "connection_provider" in data:
+                payload["connection_provider"] = data["connection_provider"]
+            return payload
+        return None
+
+    def _try_openai_sso_selector_continue(self, response: HttpResult) -> HttpResult | None:
+        payload = self._openai_sso_connection_payload(response)
+        if payload is None:
+            return None
+        return self._request(
+            "POST",
+            "https://auth.openai.com/api/accounts/authorize/continue",
+            headers={
+                "accept": "application/json",
+                "content-type": "application/json",
+                "origin": "https://auth.openai.com",
+                "referer": response.url,
+            },
+            json_body=payload,
+            allow_redirects=False,
+        )
+
     def _chatgpt_login_url_from_idp_start(self, start_url: str) -> str:
         response = self._request("GET", start_url, allow_redirects=False)
         location = self._redirect_location(response)
@@ -570,6 +613,10 @@ class SSOHttpFlow:
             openai_continue = self._try_openai_identifier_continue(response, account)
             if openai_continue is not None:
                 response = openai_continue
+                continue
+            openai_sso_continue = self._try_openai_sso_selector_continue(response)
+            if openai_sso_continue is not None:
+                response = openai_sso_continue
                 continue
             submitted = self._submit_best_form(response, account)
             if submitted is not None:
