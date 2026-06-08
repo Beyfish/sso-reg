@@ -510,6 +510,9 @@ class SSOHttpFlow:
             )
         return _absolute_url(response.url, url)
 
+    def _handle_custom_page(self, response: HttpResult, account: GeneratedAccount, stage: str) -> str | HttpResult | None:
+        return None
+
     def _drive_until_callback(self, start_url: str, account: GeneratedAccount, *, expected_state: str, stage: str) -> str:
         current = start_url
         response: HttpResult | None = None
@@ -533,6 +536,14 @@ class SSOHttpFlow:
             if scripted:
                 current = scripted
                 response = None
+                continue
+            custom = self._handle_custom_page(response, account, stage)
+            if isinstance(custom, str) and custom:
+                current = custom
+                response = None
+                continue
+            if custom is not None:
+                response = custom
                 continue
             consent = self._try_workspace_consent(response)
             if consent is not None:
