@@ -41,7 +41,7 @@ class CompanyAccount:
             },
         )
 
-    def as_public_dict(self) -> dict[str, str]:
+    def as_public_dict(self) -> dict[str, str | bool]:
         return {
             "username": self.username,
             "email": self.email,
@@ -52,7 +52,7 @@ class CompanyAccount:
             "has_password": bool(self.password),
         }
 
-    def as_private_dict(self) -> dict[str, str]:
+    def as_private_dict(self) -> dict[str, str | bool]:
         data = self.as_public_dict()
         data["password"] = self.password
         return data
@@ -77,9 +77,26 @@ def _password(rng: random.Random, length: int) -> str:
     return "".join(chars)
 
 
+def _is_valid_domain(domain: str) -> bool:
+    if not domain or "." not in domain or len(domain) > 253:
+        return False
+    if any(ch.isspace() for ch in domain):
+        return False
+
+    labels = domain.split(".")
+    for label in labels:
+        if not label or len(label) > 63:
+            return False
+        if label.startswith("-") or label.endswith("-"):
+            return False
+        if not all(ch.isascii() and (ch.isalnum() or ch == "-") for ch in label):
+            return False
+    return True
+
+
 def generate_dev_account(*, email_domain: str, seed: str = "", password_length: int = 16) -> CompanyAccount:
     domain = str(email_domain or "").strip().lstrip("@").lower()
-    if not domain or "." not in domain:
+    if not _is_valid_domain(domain):
         raise ValueError("email_domain must be a domain like company.com")
     seed_text = seed or domain
     number = _seed_to_number(seed_text) % 10000
