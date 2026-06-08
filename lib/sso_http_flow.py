@@ -538,13 +538,20 @@ class SSOHttpFlow:
                 response = None
                 continue
             custom = self._handle_custom_page(response, account, stage)
-            if isinstance(custom, str) and custom:
-                current = custom
-                response = None
-                continue
-            if custom is not None:
+            if isinstance(custom, str):
+                if custom:
+                    current = custom
+                    response = None
+                    continue
+            elif isinstance(custom, HttpResult):
                 response = custom
                 continue
+            elif custom is not None:
+                raise OAuthFlowError(
+                    "_handle_custom_page 返回了不支持的类型",
+                    stage=stage,
+                    data={"url": response.url, "return_type": type(custom).__name__},
+                )
             consent = self._try_workspace_consent(response)
             if consent is not None:
                 location = self._redirect_location(consent) or self._response_continue_url(consent)

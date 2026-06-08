@@ -7,7 +7,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import pytest
+
 from lib.codex_oauth import OAuthStart
+from lib.errors import OAuthFlowError
 from lib.idp_client import GeneratedAccount
 from lib.sso_http_flow import SSOHttpFlow, parse_html_forms, parse_html_links, populate_account_form
 
@@ -182,3 +185,61 @@ def test_drive_until_callback_allows_custom_page_handler(tmp_path):
     token = flow.authorize_codex(oauth, account)
 
     assert token["refresh_token"] == "ref"
+
+
+def test_custom_page_handler_empty_string_falls_through_to_unhandled_page(tmp_path):
+    class EmptyHookSession:
+        def request(self, method, url, **kwargs):
+            if url == "https://auth.example/start":
+                return FakeResponse(200, "https://custom.example/page", {}, "<html>custom</html>")
+            raise AssertionError(url)
+
+    class EmptyHookFlow(SSOHttpFlow):
+        def _handle_custom_page(self, response, account, stage):
+            return ""
+
+    flow = EmptyHookFlow(session=EmptyHookSession(), artifact_dir=tmp_path)
+    account = GeneratedAccount(id=0, email="u@example.com", password="pw")
+    oauth = OAuthStart(
+        auth_url="https://auth.example/start",
+        state="hook_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+        client_id="client_1",
+        scope="openid",
+    )
+
+    with pytest.raises(OAuthFlowError) as excinfo:
+        flow.authorize_codex(oauth, account)
+
+    assert excinfo.value.stage == "codex_authorize"
+    assert "无法自动处理的页面" in str(excinfo.value)
+
+
+def test_custom_page_handler_rejects_unsupported_return_type(tmp_path):
+    class BadHookSession:
+        def request(self, method, url, **kwargs):
+            if url == "https://auth.example/start":
+                return FakeResponse(200, "https://custom.example/page", {}, "<html>custom</html>")
+            raise AssertionError(url)
+
+    class BadHookFlow(SSOHttpFlow):
+        def _handle_custom_page(self, response, account, stage):
+            return {"url": "http://localhost:1455/auth/callback?code=hook_code&state=hook_state"}
+
+    flow = BadHookFlow(session=BadHookSession(), artifact_dir=tmp_path)
+    account = GeneratedAccount(id=0, email="u@example.com", password="pw")
+    oauth = OAuthStart(
+        auth_url="https://auth.example/start",
+        state="hook_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+        client_id="client_1",
+        scope="openid",
+    )
+
+    with pytest.raises(OAuthFlowError) as excinfo:
+        flow.authorize_codex(oauth, account)
+
+    assert excinfo.value.stage == "codex_authorize"
+    assert excinfo.value.data["return_type"] == "dict"
