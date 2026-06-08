@@ -511,6 +511,12 @@ class SSOHttpFlow:
         return _absolute_url(response.url, url)
 
     def _handle_custom_page(self, response: HttpResult, account: GeneratedAccount, stage: str) -> str | HttpResult | None:
+        """Override custom pages.
+
+        Return None or "" to continue normal handling, a non-empty str for
+        the next URL, or HttpResult to continue processing that response.
+        Other non-None return types are rejected by the driver.
+        """
         return None
 
     def _drive_until_callback(self, start_url: str, account: GeneratedAccount, *, expected_state: str, stage: str) -> str:

@@ -12,7 +12,7 @@ import pytest
 from lib.codex_oauth import OAuthStart
 from lib.errors import OAuthFlowError
 from lib.idp_client import GeneratedAccount
-from lib.sso_http_flow import SSOHttpFlow, parse_html_forms, parse_html_links, populate_account_form
+from lib.sso_http_flow import HttpResult, SSOHttpFlow, parse_html_forms, parse_html_links, populate_account_form
 
 
 @dataclass
@@ -169,6 +169,47 @@ def test_drive_until_callback_allows_custom_page_handler(tmp_path):
         def _handle_custom_page(self, response, account, stage):
             if response.url == "https://custom.example/page":
                 return "http://localhost:1455/auth/callback?code=hook_code&state=hook_state"
+            return None
+
+    flow = HookFlow(session=HookSession(), artifact_dir=tmp_path)
+    account = GeneratedAccount(id=0, email="u@example.com", password="pw")
+    oauth = OAuthStart(
+        auth_url="https://auth.example/start",
+        state="hook_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+        client_id="client_1",
+        scope="openid",
+    )
+
+    token = flow.authorize_codex(oauth, account)
+
+    assert token["refresh_token"] == "ref"
+
+
+def test_drive_until_callback_allows_custom_page_handler_http_result(tmp_path):
+    class HookSession:
+        def request(self, method, url, **kwargs):
+            if url == "https://auth.example/start":
+                return FakeResponse(200, "https://custom.example/page", {}, "<html>custom</html>")
+            if url == "https://auth.openai.com/oauth/token":
+                return FakeResponse(
+                    200,
+                    url,
+                    {},
+                    json.dumps({"access_token": "acc", "refresh_token": "ref", "id_token": "", "expires_in": 3600}),
+                    {"access_token": "acc", "refresh_token": "ref", "id_token": "", "expires_in": 3600},
+                )
+            raise AssertionError(url)
+
+    class HookFlow(SSOHttpFlow):
+        def _handle_custom_page(self, response, account, stage):
+            if response.url == "https://custom.example/page":
+                return HttpResult(
+                    302,
+                    response.url,
+                    {"Location": "http://localhost:1455/auth/callback?code=hook_code&state=hook_state"},
+                )
             return None
 
     flow = HookFlow(session=HookSession(), artifact_dir=tmp_path)
