@@ -1,323 +1,147 @@
-# Idp Team Automation
+# 企业 SSO Codex 控制台
 
-独立 Python 项目：通过 IDP 生成账号，走纯 HTTP 协议完成 ChatGPT SSO / Codex OAuth，获取 Codex refresh token，并写入 Sub2API 或 CLIProxyAPI（CPA）。
+Windows 桌面工具：输入企业 SSO 域名后，自动执行员工账号准备、OpenAI/Codex OAuth 授权流程、令牌产物生成，并可按需导出到 Sub2API 或 CLIProxyAPI。
 
-## 项目简介
+本仓库基于开源项目 [`supperzl/ita`](https://github.com/supperzl/ita) 二次开发，新增了企业 SSO 注册流程、中文 GUI、Windows exe 打包、系统代理识别、GUI 测试和发布包。感谢原项目作者与协议实现者的工作。
 
-Idp Team Automation 是一个基于 OpenAI SSO Bug 的 Team 成员账号开通自动化工具。
+## 使用范围
 
-项目会自动完成 IDP 账号生成、Team 成员账号开通、Codex 授权 URL 生成、refresh token 获取，并将账号录入配置的导出目标。
+仅用于你有权限管理或测试的企业 SSO 域名、账号与导出服务。不要用于未授权的账号创建、绕过访问控制或第三方系统操作。
 
-请作者喝杯咖啡，作者会送你 1000 点 IDP API 点数：[https://pay.ldxp.cn/item/9isxtv](https://pay.ldxp.cn/item/9isxtv)。
+## 直接使用 Windows 软件
 
-## 作者信息
-
-- iDP 协议作者：@该隐
-- 注册机作者：@朴圣佑
-
-## 联系方式
-
-| iDP 协议作者 | 注册机作者 |
-| --- | --- |
-| @该隐 | @朴圣佑 |
-| <img src="docs/assets/cain_qr.jpg" alt="@该隐二维码" width="260"> | <img src="docs/assets/pu_shengyou_qr.jpg" alt="@朴圣佑二维码" width="260"> |
-
-## 功能
-
-- 单账号生成、授权、推送 Sub2API / CPA。
-- 批量多线程 TUI：
-  - 输入账号数量和线程数。
-  - 每个任务失败最多重试 5 次；注册账号一旦生成成功，后续重试会复用同一个 IDP account_id，避免重复消耗点数。
-  - 运行中显示成功数、失败数、运行中数、等待数。
-  - 最终输出统计文本，不在终端打印 token JSON。
-- 纯 HTTP 协议流程；无浏览器 fallback。
-- 日志和 artifact 默认脱敏。
-
-## 快速使用步骤
-
-1. 复制环境变量模板：
-
-   ```bash
-   cp .env.example .env
-   ```
-
-2. 编辑 `.env`，填写 IDP 和 Sub2API 配置：
-
-   ```env
-   IDP_TOKEN=
-   SUB2API_URL=
-   SUB2API_EMAIL=
-   SUB2API_PASSWORD=
-   SUB2API_GROUP=5
-   ```
-
-3. 启动 TUI：
-
-   ```bash
-   python3 scripts/run_batch_tui.py
-   ```
-
-4. 根据 TUI 选择模块：
-
-   ```text
-   1. 注册账号
-   2. 重新补授权
-   ```
-
-## 运行截图
-
-<img src="docs/assets/tui_running.png" alt="Idp Team Automation TUI 运行截图" width="900">
-
-## 安装
-
-```bash
-cd <项目目录>
-python3 -m pip install -e .
-```
-
-如果只直接运行脚本，确保当前 Python 已安装：
-
-```bash
-python3 -m pip install 'curl_cffi>=0.7'
-```
-
-## 配置
-
-复制示例配置：
-
-```bash
-cp .env.example .env
-```
-
-填写：
-
-```env
-IDP_BASE=http://idp.fdvctte.info
-IDP_TOKEN=
-
-SUB2API_URL=
-SUB2API_EMAIL=
-SUB2API_PASSWORD=
-EXPORT_TARGETS=sub2api
-```
-
-可选：
-
-```env
-IDP_CLIENT_ID=
-IDP_CHANNEL_ID=
-IDP_DOMAIN=
-SUB2API_MODEL_WHITELIST=
-CPA_URL=
-CPA_MANAGEMENT_KEY=
-REQUEST_TIMEOUT=60
-```
-
-## 单账号运行
-
-生成新账号并推送默认导出目标（默认 Sub2API）：
-
-```bash
-python3 scripts/run_idp_codex.py --timeout 60
-```
-
-只推送 CPA：
-
-```bash
-python3 scripts/run_idp_codex.py --timeout 60 --export-targets cpa
-```
-
-同时推送 Sub2API 和 CPA：
-
-```bash
-python3 scripts/run_idp_codex.py --timeout 60 --export-targets sub2api,cpa
-```
-
-复用已有 IDP account_id：
-
-```bash
-python3 scripts/run_idp_codex.py --account-id 1638 --timeout 60
-```
-
-只跑 OAuth，不推送：
-
-```bash
-python3 scripts/run_idp_codex.py --timeout 60 --no-sub2api
-# 或
-python3 scripts/run_idp_codex.py --timeout 60 --export-targets none
-```
-
-## 统一 TUI
-
-交互式：
-
-```bash
-python3 scripts/run_batch_tui.py
-```
-
-进入后先选择模块：
+下载或在仓库中找到：
 
 ```text
-1. 注册账号
-2. 重新补授权
+release/CompanySSOCodexGUI-windows-x64.zip
 ```
 
-选择重新补授权时，只需要填写分组 ID、可选指定邮箱和线程数。
-
-注册账号非交互：
-
-```bash
-python3 scripts/run_batch_tui.py --mode register --count 10 --threads 3 --yes
-```
-
-指定重试次数：
-
-```bash
-python3 scripts/run_batch_tui.py --mode register --count 10 --threads 3 --retries 5 --yes
-```
-
-只跑 OAuth，不推送：
-
-```bash
-python3 scripts/run_batch_tui.py --mode register --count 5 --threads 2 --no-sub2api --yes
-# 或
-python3 scripts/run_batch_tui.py --mode register --count 5 --threads 2 --export-targets none --yes
-```
-
-重新补授权非交互：
-
-```bash
-python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --yes
-```
-
-重新补授权只处理前 5 个错误账号：
-
-```bash
-python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --limit 5 --yes
-```
-
-重新补授权指定单个邮箱：
-
-```bash
-python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 1 --email user@example.com --yes
-```
-
-## Sub2API 分组错误账号检测
-
-检测 `.env` 中 `SUB2API_GROUP` 指定分组内状态错误的账号：
-
-```bash
-python3 scripts/check_sub2api_group.py
-```
-
-指定分组：
-
-```bash
-python3 scripts/check_sub2api_group.py --group 5
-```
-
-输出 JSON 并保存：
-
-```bash
-python3 scripts/check_sub2api_group.py --group 5 --json --output artifacts/sub2api_group_5_health.json
-```
-
-检测错误账号并生成重新授权计划，默认不更新远端：
-
-```bash
-python3 scripts/reauthorize_sub2api_errors.py --group 5
-```
-
-确认后实际重新授权并更新原 Sub2API 账号，也可以用统一 TUI：
-
-```bash
-python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply
-python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --yes
-```
-
-重新授权成功后会自动执行：
-
-- 更新原 Sub2API 账号 credentials。
-- 清空账号错误状态。
-- 清空账号限流状态。
-- 打开账号调度。
-
-限制只处理前 3 个错误账号：
-
-```bash
-python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply --limit 3
-```
-
-只处理指定邮箱：
-
-```bash
-python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply --email user@example.com
-```
-
-当前检测结果：
+解压后运行：
 
 ```text
-SUB2API_GROUP=5
-分组账号数：88
-错误账号数：23
-正常账号数：65
-错误状态：error
-主要错误：Token revoked (401)
+CompanySSOCodexGUI/CompanySSOCodexGUI.exe
 ```
 
-## 输出
+注意：这是 PyInstaller one-dir 包，不能只复制单个 exe。exe 旁边的 `_internal` 目录必须保留。
 
-单账号输出目录：
+## GUI 功能
+
+- 输入一个 SSO 域名即可启动单次流程。
+- 自动生成开发员工账号，或显式填写员工邮箱与初始密码。
+- 可选择仅保存令牌、导出 Sub2API、导出 CPA、同时导出。
+- 默认跟随 Windows 系统代理；勾选“不使用代理”可强制直连。
+- 运行日志实时显示步骤、产物目录和错误原因。
+- 使用 MiSans 字体和 Apple 风格中文界面。
+
+## 当前网络行为
+
+新版程序会自动读取 Windows 系统代理，解决 OpenAI 授权请求直连时可能出现的：
 
 ```text
-artifacts/idp_codex/
+Country, region, or territory not supported
 ```
 
-批量输出目录：
+如果 OpenAI 返回区域限制，程序会明确显示 `openai_network_blocked`，不再误报为“纯 HTTP 流程遇到无法自动处理的页面”。
 
-```text
-artifacts/batch_YYYYMMDD_HHMMSS/
-├── summary.json
-├── task_0001/
-│   ├── attempt_01/
-│   └── ...
-└── task_0002/
-    └── ...
-```
+如果企业 SSO 服务器本身不可达，程序会显示 `company_sso_http`，并提示检查 SSO 域名、端口和 OpenAI/WorkOS SSO 配置。
 
-`artifacts/` 是运行产物目录，已被 `.gitignore` 忽略；只保留 `artifacts/.gitkeep`。
+## 本机开发运行
 
-清理运行产物：
+安装依赖：
 
 ```bash
-find artifacts -mindepth 1 ! -name .gitkeep -delete
+python -m pip install -e .
+python -m pip install pywebview pytest
+```
+
+启动 GUI 服务：
+
+```bash
+python gui/server.py --host 127.0.0.1 --port 8765
+```
+
+启动 WebView 桌面壳：
+
+```bash
+python gui/webview_app.py
+```
+
+## 命令行运行
+
+仅生成令牌，不导出：
+
+```bash
+python scripts/run_company_sso_codex.py --sso-domain hegiw77632.cloud-ip.cc --export-targets none --timeout 60
+```
+
+导出到 Sub2API：
+
+```bash
+python scripts/run_company_sso_codex.py --sso-domain hegiw77632.cloud-ip.cc --export-targets sub2api --timeout 60
+```
+
+禁用代理：
+
+```bash
+python scripts/run_company_sso_codex.py --sso-domain hegiw77632.cloud-ip.cc --export-targets none --no-proxy
+```
+
+## 打包
+
+```powershell
+python -m PyInstaller --noconfirm --clean --windowed --name CompanySSOCodexGUI --add-data "gui;gui" --collect-all curl_cffi --collect-all webview --collect-all clr_loader --collect-all pythonnet gui\webview_app.py
+```
+
+生成目录：
+
+```text
+dist/CompanySSOCodexGUI/
+```
+
+发布 zip：
+
+```text
+release/CompanySSOCodexGUI-windows-x64.zip
 ```
 
 ## 测试
 
 ```bash
-python3 -m pytest -q
+python -m pytest -q
 ```
+
+当前验证：
+
+```text
+154 passed
+```
+
+已做过真实 GUI 点击测试：打开 exe、输入 SSO 域名、修改 seed/timeout、切换导航与导出选项、点击开始运行、检查状态卡、队列和运行日志。
 
 ## 目录
 
 ```text
-lib/
-├── batch_tui.py        # 批量多线程 TUI
-├── cli.py              # 单账号 CLI 编排
-├── codex_oauth.py      # PKCE / OAuth URL / token 解析
-├── config.py           # .env 和 CLI 配置
-├── cpa_export.py       # CLIProxyAPI auth 文件导出
-├── errors.py           # 项目异常类型
-├── idp_client.py       # IDP API
-├── logging_utils.py    # 脱敏 JSONL 日志
-├── reauthorize_sub2api_errors.py # 错误账号重新授权
-├── sub2api_health.py   # Sub2API 分组账号状态检测
-├── sso_http_flow.py    # 纯 HTTP SSO/OAuth 主流程
-└── sub2api_export.py   # Sub2API 导出
+gui/
+├── index.html          # 中文 WebView UI
+├── styles.css          # Apple 风格布局和 MiSans 字体
+├── app.js              # 前端状态、命令预览、运行轮询
+├── server.py           # 本地 GUI API
+└── webview_app.py      # Windows 桌面入口
 
-docs/assets/
-├── cain_qr.jpg         # @该隐二维码
-├── pu_shengyou_qr.jpg  # @朴圣佑二维码
-└── tui_running.png     # TUI 运行截图
+lib/
+├── company_sso_cli.py  # 企业 SSO CLI 编排
+├── company_sso_flow.py # 企业 SSO 页面/WorkOS 流程处理
+├── sso_http_flow.py    # OAuth/HTTP 驱动
+└── config.py           # 配置、系统代理解析
+
+release/
+└── CompanySSOCodexGUI-windows-x64.zip
 ```
+
+## 致谢
+
+- 上游项目：[`supperzl/ita`](https://github.com/supperzl/ita)
+- 原项目作者、iDP 协议作者与注册机作者
+- MiSans 字体项目
+
+本仓库保留上游版权信息，并在二次开发基础上增加 GUI、企业 SSO、打包和测试能力。
