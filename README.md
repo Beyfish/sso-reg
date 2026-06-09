@@ -15,6 +15,10 @@ Idp Team Automation 是一个基于 OpenAI SSO Bug 的 Team 成员账号开通�
 - iDP 协议作者：@该隐
 - 注册机作者：@朴圣佑
 
+## 上游项目与致谢
+
+本项目使用并基于开源项目 [supperzl/ita](https://github.com/supperzl/ita) 继续开发，保留原项目中的作者信息与版权说明。感谢上游项目作者和维护者对 iDP 协议、注册机流程、TUI 与自动化能力的开源贡献。
+
 ## 联系方式
 
 | iDP 协议作者 | 注册机作者 |
