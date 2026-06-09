@@ -1764,3 +1764,43 @@ def test_company_sso_omitted_action_login_with_register_submit_is_not_registrati
         flow.authorize_codex(oauth, account.to_generated_account())
 
     assert not any(method == "POST" and url == "https://sso.company.test/login" for method, url, _kwargs in session.calls)
+
+
+def test_company_sso_http_error_is_reported_with_company_stage(tmp_path):
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if url == "https://auth.example/oauth":
+                return FakeResponse(302, url, {"Location": "https://sso.company.test/login"})
+            if url == "https://sso.company.test/login":
+                raise RuntimeError("empty reply from server")
+            raise AssertionError((method, url, kwargs))
+
+    session = Session()
+    account = CompanyAccount(
+        username="alice.zhang",
+        email="alice.zhang@company.test",
+        password="InitPass123!",
+        first_name="Alice",
+        last_name="Zhang",
+    )
+    flow = CompanySSOHttpFlow(
+        company_sso_domain="sso.company.test",
+        session=session,
+        artifact_dir=tmp_path,
+    )
+    oauth = OAuthStart(
+        auth_url="https://auth.example/oauth",
+        state="company_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    with pytest.raises(OAuthFlowError) as excinfo:
+        flow.authorize_codex(oauth, account.to_generated_account())
+
+    assert excinfo.value.stage == "company_sso_http"
+    assert "企业 SSO 服务器无法连接" in str(excinfo.value)

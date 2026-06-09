@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -255,6 +256,48 @@ def test_custom_page_handler_empty_string_falls_through_to_unhandled_page(tmp_pa
 
     assert excinfo.value.stage == "codex_authorize"
     assert "无法自动处理的页面" in str(excinfo.value)
+
+
+def test_openai_unsupported_region_error_is_reported_as_network_block(tmp_path):
+    class BlockedSession:
+        def request(self, method, url, **kwargs):
+            if url.startswith("https://auth.openai.com/oauth/authorize"):
+                payload = {
+                    "error": {
+                        "code": "unsupported_country_region_territory",
+                        "message": "Country, region, or territory not supported",
+                        "type": "request_forbidden",
+                    }
+                }
+                return FakeResponse(
+                    403,
+                    url,
+                    {"Content-Type": "application/json"},
+                    json.dumps(payload),
+                    payload,
+                )
+            raise AssertionError(url)
+
+    flow = SSOHttpFlow(session=BlockedSession(), artifact_dir=tmp_path)
+    account = GeneratedAccount(id=0, email="u@example.com", password="pw")
+    oauth = OAuthStart(
+        auth_url="https://auth.openai.com/oauth/authorize?state=blocked_state",
+        state="blocked_state",
+        code_verifier="verifier",
+        redirect_uri="http://localhost:1455/auth/callback",
+        client_id="client_1",
+        scope="openid",
+    )
+
+    with pytest.raises(OAuthFlowError) as excinfo:
+        flow.authorize_codex(oauth, account)
+
+    assert excinfo.value.stage == "openai_network_blocked"
+    assert excinfo.value.retryable is True
+    assert excinfo.value.data["code"] == "unsupported_country_region_territory"
+    assert "代理" in str(excinfo.value)
+    assert Path(excinfo.value.data["artifact"]).suffix == ".json"
+    assert Path(excinfo.value.data["artifact"]).exists()
 
 
 def test_custom_page_handler_rejects_unsupported_return_type(tmp_path):

@@ -190,6 +190,20 @@ class CompanySSOHttpFlow(SSOHttpFlow):
         host = self._normalized_host(url)
         return bool(host and host in self._workos_saml_hosts)
 
+    def _http_error_stage(self, url: str) -> str:
+        if self._is_company_sso_url(url):
+            return "company_sso_http"
+        return super()._http_error_stage(url)
+
+    def _http_error_message(self, url: str, exc: BaseException) -> str:
+        if self._is_company_sso_url(url):
+            return (
+                f"企业 SSO 服务器无法连接：{url}。"
+                "请确认输入的 SSO 域名、端口和 OpenAI SSO 配置当前可访问，"
+                f"原始错误：{exc}"
+            )
+        return super()._http_error_message(url, exc)
+
     def _form_has_saml_context(self, form: HtmlForm) -> bool:
         field_names = {self._field_name(key) for key in form.fields}
         return "samlrequest" in field_names and "relaystate" in field_names

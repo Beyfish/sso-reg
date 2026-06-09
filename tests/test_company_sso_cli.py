@@ -106,6 +106,94 @@ def test_dev_generate_writes_artifacts_and_success_stdout(monkeypatch, tmp_path,
     assert (tmp_path / "network.jsonl").exists()
 
 
+def test_sso_domain_only_auto_generates_dev_employee(monkeypatch, tmp_path, capsys):
+    seen = {}
+
+    class FakeFlow:
+        def __init__(self, *, company_sso_domain, artifact_dir, **kwargs):
+            assert company_sso_domain == "hegiw77632.cloud-ip.cc"
+            assert artifact_dir == tmp_path
+
+        def authorize_codex(self, oauth, account):
+            seen["email"] = account.email
+            seen["password"] = account.password
+            return {
+                "type": "codex",
+                "email": account.email,
+                "account_id": "acct_auto",
+                "user_id": "user_auto",
+                "access_token": "acc",
+                "refresh_token": "ref",
+                "id_token": "",
+                "client_id": oauth.client_id,
+            }
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+    monkeypatch.setattr(company_sso_cli, "_export_record", lambda *args, **kwargs: {})
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "hegiw77632.cloud-ip.cc",
+            "--seed",
+            "smoke-001",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+            "--no-proxy",
+        ]
+    )
+
+    assert code == 0
+    stdout, _captured = _parse_stdout_json(capsys)
+    assert stdout["status"] == "success"
+    assert stdout["account"]["email"] == seen["email"]
+    assert stdout["account"]["email"].endswith("@hegiw77632.cloud-ip.cc")
+    assert seen["password"]
+
+
+def test_dev_generate_infers_email_domain_from_sso_url(monkeypatch, tmp_path, capsys):
+    seen = {}
+
+    class FakeFlow:
+        def __init__(self, *, company_sso_domain, **kwargs):
+            assert company_sso_domain == "https://sso.company.test/login"
+
+        def authorize_codex(self, oauth, account):
+            seen["email"] = account.email
+            return {
+                "type": "codex",
+                "email": account.email,
+                "account_id": "acct_url",
+                "user_id": "",
+                "access_token": "acc",
+                "refresh_token": "ref",
+                "id_token": "",
+                "client_id": oauth.client_id,
+            }
+
+    monkeypatch.setattr(company_sso_cli, "CompanySSOHttpFlow", FakeFlow)
+    monkeypatch.setattr(company_sso_cli, "_export_record", lambda *args, **kwargs: {})
+
+    code = company_sso_cli.main(
+        [
+            "--sso-domain",
+            "https://sso.company.test/login",
+            "--dev-generate",
+            "--artifact-dir",
+            str(tmp_path),
+            "--export-targets",
+            "none",
+            "--no-proxy",
+        ]
+    )
+
+    assert code == 0
+    _stdout, _captured = _parse_stdout_json(capsys)
+    assert seen["email"].endswith("@sso.company.test")
+
+
 def test_explicit_employee_input_uses_defaults(monkeypatch, tmp_path, capsys):
     seen = {}
 
@@ -160,11 +248,11 @@ def test_explicit_employee_input_uses_defaults(monkeypatch, tmp_path, capsys):
     assert seen["raw"]["username"] == "jane.smith"
 
 
-def test_dev_generate_requires_email_domain(tmp_path, capsys):
+def test_dev_generate_reports_invalid_inferred_email_domain(tmp_path, capsys):
     code = company_sso_cli.main(
         [
             "--sso-domain",
-            "sso.company.test",
+            "localhost",
             "--dev-generate",
             "--artifact-dir",
             str(tmp_path),
@@ -179,7 +267,7 @@ def test_dev_generate_requires_email_domain(tmp_path, capsys):
     assert payload["status"] == "failed"
     assert payload["stage"] == "config"
     assert payload["retryable"] is False
-    assert "email-domain" in payload["error"]
+    assert "email_domain" in payload["error"]
 
 
 @pytest.mark.parametrize(
@@ -510,6 +598,47 @@ def test_runtime_config_preserves_export_env_overrides(monkeypatch, tmp_path):
     assert cfg.sub2api_priority == 3
     assert cfg.sub2api_rate_multiplier == 2.5
     assert cfg.cpa_priority == 4
+
+
+def test_runtime_config_uses_resolved_proxy(monkeypatch):
+    monkeypatch.setattr(company_sso_cli, "resolve_proxy", lambda value, *, no_proxy=False: "" if no_proxy else "http://127.0.0.1:20122")
+    args = company_sso_cli.build_parser().parse_args(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--export-targets",
+            "none",
+        ]
+    )
+
+    cfg = company_sso_cli._runtime_config_from_args(args)
+
+    assert cfg.proxy == "http://127.0.0.1:20122"
+
+
+def test_runtime_config_no_proxy_disables_resolved_proxy(monkeypatch):
+    monkeypatch.setattr(company_sso_cli, "resolve_proxy", lambda value, *, no_proxy=False: "" if no_proxy else "http://127.0.0.1:20122")
+    args = company_sso_cli.build_parser().parse_args(
+        [
+            "--sso-domain",
+            "sso.company.test",
+            "--email",
+            "jane.smith@company.test",
+            "--password",
+            "InitPass123!",
+            "--export-targets",
+            "none",
+            "--no-proxy",
+        ]
+    )
+
+    cfg = company_sso_cli._runtime_config_from_args(args)
+
+    assert cfg.proxy == ""
 
 
 def test_export_targets_dispatch_builds_company_source_record(monkeypatch, tmp_path, capsys):

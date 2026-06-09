@@ -322,10 +322,19 @@ class SSOHttpFlow:
                 if self.logger:
                     self.logger.write("oauth_http_error", {"method": method, "url": url, "attempt": attempt, "retryable": retryable, "error": str(exc)})
                 if not retryable or attempt >= attempts:
-                    raise OAuthFlowError(f"OAuth HTTP 请求失败：{exc}", stage="oauth_http", retryable=True) from exc
+                    raise OAuthFlowError(
+                        self._http_error_message(url, exc),
+                        stage=self._http_error_stage(url),
+                        retryable=True,
+                    ) from exc
                 time.sleep(min(3.0, 0.5 * attempt))
         else:  # pragma: no cover
-            raise OAuthFlowError(f"OAuth HTTP 请求失败：{last_exc}", stage="oauth_http", retryable=True)
+            fallback_error = last_exc or RuntimeError("unknown HTTP error")
+            raise OAuthFlowError(
+                self._http_error_message(url, fallback_error),
+                stage=self._http_error_stage(url),
+                retryable=True,
+            )
         text = str(getattr(resp, "text", "") or "")
         headers_out = {str(k): str(v) for k, v in dict(getattr(resp, "headers", {}) or {}).items()}
         result = HttpResult(
@@ -346,10 +355,80 @@ class SSOHttpFlow:
         text = str(exc or "").lower()
         return any(marker in text for marker in ("curl: (52)", "empty reply", "timed out", "connection reset", "connection aborted", "ssl", "temporarily unavailable"))
 
+    def _http_error_stage(self, url: str) -> str:
+        return "oauth_http"
+
+    def _http_error_message(self, url: str, exc: BaseException) -> str:
+        return f"OAuth HTTP 请求失败：{exc}"
+
     def _save_html(self, name: str, response: HttpResult) -> Path:
         path = self.artifact_dir / name
         path.write_text(response.text or "", encoding="utf-8")
         return path
+
+    def _save_response_body(self, name: str, response: HttpResult) -> Path:
+        content_type = response.header("Content-Type").lower()
+        if name.endswith(".html") and ("json" in content_type or isinstance(response.json_data, dict)):
+            name = name[:-5] + ".json"
+        path = self.artifact_dir / name
+        path.write_text(response.text or "", encoding="utf-8")
+        return path
+
+    def _json_error(self, response: HttpResult) -> dict[str, Any]:
+        data = response.json_data
+        if not isinstance(data, dict) and response.text:
+            try:
+                data = json.loads(response.text)
+            except json.JSONDecodeError:
+                data = None
+        if not isinstance(data, dict):
+            return {}
+        error = data.get("error")
+        if isinstance(error, dict):
+            return error
+        if isinstance(error, str):
+            return {"message": error}
+        return data
+
+    def _raise_known_terminal_http_error(self, response: HttpResult, *, stage: str, step: int) -> None:
+        if response.status_code < 400:
+            return
+        parsed = urllib.parse.urlparse(response.url)
+        error = self._json_error(response)
+        code = str(error.get("code") or "").strip()
+        message = str(error.get("message") or response.text[:300] or "").strip()
+        error_type = str(error.get("type") or "").strip()
+        if (
+            parsed.netloc == "auth.openai.com"
+            and response.status_code == 403
+            and (
+                code == "unsupported_country_region_territory"
+                or error_type == "request_forbidden"
+                or "country, region, or territory not supported" in message.lower()
+            )
+        ):
+            path = self._save_response_body(f"openai_network_blocked_{stage}_{step}.json", response)
+            hint = "请启用可访问 OpenAI 的系统代理/HTTP_PROXY，或取消勾选“不使用代理”后重试。"
+            raise OAuthFlowError(
+                f"OpenAI 授权请求被当前网络出口拒绝：{message or '当前国家、地区或网络出口不受支持'}。{hint}已保存 {path}",
+                stage="openai_network_blocked",
+                retryable=True,
+                data={
+                    "url": response.url,
+                    "status": response.status_code,
+                    "code": code,
+                    "message": message,
+                    "proxy_configured": bool(self.proxy),
+                    "artifact": str(path),
+                },
+            )
+        if error and parsed.netloc == "auth.openai.com":
+            path = self._save_response_body(f"openai_http_error_{stage}_{step}.json", response)
+            raise OAuthFlowError(
+                f"OpenAI 授权请求失败：HTTP {response.status_code} {message or code or error_type}，已保存 {path}",
+                stage="openai_http_error",
+                data={"url": response.url, "status": response.status_code, "code": code, "message": message, "artifact": str(path)},
+            )
 
     def _redirect_location(self, response: HttpResult) -> str:
         location = response.header("Location")
@@ -625,7 +704,8 @@ class SSOHttpFlow:
             # If a page is already an authenticated terminal page, let caller proceed.
             if stage == "prime" and response.status_code < 400:
                 return response.url
-            path = self._save_html(f"unhandled_{stage}_{step}.html", response)
+            self._raise_known_terminal_http_error(response, stage=stage, step=step)
+            path = self._save_response_body(f"unhandled_{stage}_{step}.html", response)
             raise OAuthFlowError(
                 f"纯 HTTP 流程遇到无法自动处理的页面：{response.url}，已保存 {path}",
                 stage=stage,

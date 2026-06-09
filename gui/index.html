@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>企业 SSO Codex 控制台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#mainContent">跳到主内容</a>
+
+    <main class="shell" id="mainContent">
+      <header class="topbar">
+        <div class="brand" aria-label="控制台标题">
+          <div class="mark">SSO</div>
+          <div>
+            <h1>Codex 注册控制台</h1>
+            <p>SSO 注册 / OAuth 令牌生成 / 导出同步</p>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="主导航">
+          <button class="nav-item is-active" type="button" data-view="run">运行</button>
+          <button class="nav-item" type="button" data-view="batch">批量</button>
+          <button class="nav-item" type="button" data-view="health">健康</button>
+          <button class="nav-item" type="button" data-view="artifacts">产物</button>
+        </nav>
+
+        <div class="actions">
+          <button class="btn" id="copyCommand" type="button"><span class="glyph">⌘</span>复制命令</button>
+          <button class="btn primary" id="startRun" type="button"><span class="glyph">▶</span>开始运行</button>
+        </div>
+      </header>
+
+      <section class="view is-visible" id="view-run" aria-label="单次运行">
+        <div class="workspace">
+          <aside>
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">运行参数</h2>
+                <span class="panel-note" id="serverState">hegiw77632.cloud-ip.cc</span>
+              </div>
+              <div class="panel-body">
+                <form id="runForm" autocomplete="off" class="field-stack">
+                  <div class="field">
+                    <label class="label" for="ssoDomain">SSO 域名 <code>--sso-domain</code></label>
+                    <input class="control mono" id="ssoDomain" name="sso_domain" value="hegiw77632.cloud-ip.cc" inputmode="url" required>
+                  </div>
+
+                  <div class="field">
+                    <span class="label">账号模式 <code>--account-mode</code></span>
+                    <div class="segmented" role="group" aria-label="账号模式">
+                      <button class="segmented-option is-selected" type="button" data-account-mode="generated">自动生成</button>
+                      <button class="segmented-option" type="button" data-account-mode="explicit">显式指定</button>
+                    </div>
+                  </div>
+
+                  <div class="field-row" id="generatedFields">
+                    <div class="field">
+                      <label class="label" for="seed">种子 <code>--seed</code></label>
+                      <input class="control mono" id="seed" name="seed" value="smoke-001">
+                    </div>
+                    <div class="field">
+                      <label class="label" for="emailDomain">邮箱域 <code>--email-domain</code></label>
+                      <input class="control mono" id="emailDomain" name="email_domain" placeholder="默认跟随 SSO 域名">
+                    </div>
+                  </div>
+
+                  <div class="explicit-fields" id="explicitFields" hidden>
+                    <div class="field-row">
+                      <div class="field">
+                        <label class="label" for="email">员工邮箱</label>
+                        <input class="control mono" id="email" name="email" type="email" placeholder="new.user@company.com">
+                      </div>
+                      <div class="field">
+                        <label class="label" for="password">初始密码</label>
+                        <input class="control" id="password" name="password" type="password">
+                      </div>
+                    </div>
+                    <div class="field-row three">
+                      <div class="field">
+                        <label class="label" for="firstName">名字</label>
+                        <input class="control" id="firstName" name="first_name">
+                      </div>
+                      <div class="field">
+                        <label class="label" for="lastName">姓氏</label>
+                        <input class="control" id="lastName" name="last_name">
+                      </div>
+                      <div class="field">
+                        <label class="label" for="employeeId">员工编号</label>
+                        <input class="control mono" id="employeeId" name="employee_id">
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="field-row">
+                    <div class="field">
+                      <label class="label" for="timeout">超时秒数 <code>--timeout</code></label>
+                      <input class="control mono" id="timeout" name="timeout" type="number" min="1" value="60">
+                    </div>
+                    <div class="field">
+                      <span class="label">网络策略</span>
+                      <label class="checkline">
+                        <input id="noProxy" name="no_proxy" type="checkbox">
+                        <span>不使用代理</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <fieldset class="fieldset field">
+                    <legend class="label">导出目标 <code>--export-targets</code></legend>
+                    <div class="segmented four" role="group" aria-label="导出目标">
+                      <button class="segmented-option is-selected" type="button" data-export-target="none">不导出</button>
+                      <button class="segmented-option" type="button" data-export-target="sub2api">Sub2API</button>
+                      <button class="segmented-option" type="button" data-export-target="cpa">CPA</button>
+                      <button class="segmented-option" type="button" data-export-target="sub2api,cpa">全部</button>
+                    </div>
+                  </fieldset>
+
+                  <div class="export-panel" id="sub2apiFields" hidden>
+                    <div class="panel-subhead">Sub2API</div>
+                    <div class="field-row">
+                      <div class="field">
+                        <label class="label" for="sub2apiUrl">服务地址</label>
+                        <input class="control mono" id="sub2apiUrl" name="sub2api_url" placeholder="https://sub2api.example">
+                      </div>
+                      <div class="field">
+                        <label class="label" for="sub2apiGroup">分组</label>
+                        <input class="control mono" id="sub2apiGroup" name="sub2api_group" placeholder="5">
+                      </div>
+                    </div>
+                    <div class="field-row">
+                      <div class="field">
+                        <label class="label" for="sub2apiEmail">管理员邮箱</label>
+                        <input class="control mono" id="sub2apiEmail" name="sub2api_email" type="email">
+                      </div>
+                      <div class="field">
+                        <label class="label" for="sub2apiPassword">管理员密码</label>
+                        <input class="control" id="sub2apiPassword" name="sub2api_password" type="password">
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="export-panel" id="cpaFields" hidden>
+                    <div class="panel-subhead">CLIProxyAPI</div>
+                    <div class="field-row">
+                      <div class="field">
+                        <label class="label" for="cpaUrl">服务地址</label>
+                        <input class="control mono" id="cpaUrl" name="cpa_url" placeholder="https://cpa.example">
+                      </div>
+                      <div class="field">
+                        <label class="label" for="cpaManagementKey">管理密钥</label>
+                        <input class="control" id="cpaManagementKey" name="cpa_management_key" type="password">
+                      </div>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">当前队列</h2>
+                <span class="panel-note">local</span>
+              </div>
+              <div class="panel-body">
+                <table class="dense-table">
+                  <thead>
+                    <tr>
+                      <th>账号</th>
+                      <th>状态</th>
+                      <th>目标</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code id="queueDomain">hegiw77632.cloud-ip.cc</code></td>
+                      <td><span class="pill" id="queueState">就绪</span></td>
+                      <td id="queueTarget">none</td>
+                    </tr>
+                    <tr>
+                      <td><code>preview</code></td>
+                      <td>等待</td>
+                      <td>token</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </aside>
+
+          <section>
+            <div class="status-strip">
+              <div>
+                <h2 id="statusHeadline">等待运行</h2>
+                <p id="statusDetail">填写或确认 SSO 域名后，点击开始运行。</p>
+              </div>
+              <span class="pill" id="runState">就绪</span>
+            </div>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">状态指标</h2>
+                <span class="panel-note">live</span>
+              </div>
+              <div class="panel-body">
+                <div class="metric-grid">
+                  <div class="metric">
+                    <strong id="metricStep">0/5</strong>
+                    <span>进度</span>
+                  </div>
+                  <div class="metric">
+                    <strong id="metricTarget">none</strong>
+                    <span>导出</span>
+                  </div>
+                  <div class="metric">
+                    <strong id="metricMode">generated</strong>
+                    <span>账号</span>
+                  </div>
+                  <div class="metric">
+                    <strong id="metricTimeout">60s</strong>
+                    <span>超时</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">五步时间线</h2>
+                <span class="panel-note">run-local</span>
+              </div>
+              <div class="panel-body">
+                <div class="timeline" id="timeline">
+                  <article class="step active">
+                    <div class="dot">1</div>
+                    <div>
+                      <h3>准备账号</h3>
+                      <p>校验 SSO 域名、账号模式、导出目标与代理策略。</p>
+                    </div>
+                    <span class="stamp">--:--</span>
+                  </article>
+                  <article class="step">
+                    <div class="dot">2</div>
+                    <div>
+                      <h3>打开 OpenAI 授权</h3>
+                      <p>生成授权链接，等待浏览器回调。</p>
+                    </div>
+                    <span class="stamp">--:--</span>
+                  </article>
+                  <article class="step">
+                    <div class="dot">3</div>
+                    <div>
+                      <h3>企业 SSO</h3>
+                      <p>确认企业域并完成 SSO 流程。</p>
+                    </div>
+                    <span class="stamp">--:--</span>
+                  </article>
+                  <article class="step">
+                    <div class="dot">4</div>
+                    <div>
+                      <h3>确认 Codex 授权</h3>
+                      <p>换取 OAuth 凭据并生成令牌产物。</p>
+                    </div>
+                    <span class="stamp">--:--</span>
+                  </article>
+                  <article class="step">
+                    <div class="dot">5</div>
+                    <div>
+                      <h3>导出产物</h3>
+                      <p>同步 Sub2API / CPA，并写入 result.json。</p>
+                    </div>
+                    <span class="stamp">--:--</span>
+                  </article>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <aside>
+            <section class="terminal">
+              <div class="term-head">
+                <div class="term-title"><span class="lights"><i></i><i></i><i></i></span>命令预览</div>
+                <span class="term-action">COPY</span>
+              </div>
+              <pre class="command-box" id="commandPreview" aria-label="命令预览"></pre>
+            </section>
+
+            <section class="terminal">
+              <div class="term-head">
+                <div class="term-title"><span class="lights"><i></i><i></i><i></i></span>运行日志</div>
+                <span class="term-action">LIVE</span>
+              </div>
+              <pre class="log-box" id="logOutput" aria-label="运行日志">尚未运行。</pre>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-batch" aria-label="批量注册">
+        <section class="panel wide-panel">
+          <div class="panel-head">
+            <h2 class="panel-title">批量任务</h2>
+            <span class="panel-note">compact view</span>
+          </div>
+          <div class="panel-body">
+            <div class="mini-grid">
+              <div class="field">
+                <label class="label" for="batchCount">数量</label>
+                <input class="control mono" id="batchCount" type="number" min="1" value="10">
+              </div>
+              <div class="field">
+                <label class="label" for="threads">并发数</label>
+                <input class="control mono" id="threads" type="number" min="1" value="3">
+              </div>
+              <div class="field">
+                <label class="label" for="retries">重试次数</label>
+                <input class="control mono" id="retries" type="number" min="1" value="5">
+              </div>
+            </div>
+            <section class="terminal flat-terminal">
+              <div class="term-head">
+                <div class="term-title"><span class="lights"><i></i><i></i><i></i></span>批量命令</div>
+                <span class="term-action">PREVIEW</span>
+              </div>
+              <pre class="command-box" id="batchCommand"></pre>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-health" aria-label="健康检查">
+        <section class="panel wide-panel">
+          <div class="panel-head">
+            <h2 class="panel-title">环境健康</h2>
+            <span class="panel-note">ready</span>
+          </div>
+          <div class="panel-body">
+            <table class="dense-table">
+              <thead>
+                <tr>
+                  <th>检查项</th>
+                  <th>当前值</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Sub2API 分组</td>
+                  <td><code>group=5</code></td>
+                  <td><span class="pill">可检查</span></td>
+                </tr>
+                <tr>
+                  <td>代理策略</td>
+                  <td><code>跟随表单</code></td>
+                  <td>已锁定</td>
+                </tr>
+              </tbody>
+            </table>
+            <section class="terminal flat-terminal">
+              <div class="term-head">
+                <div class="term-title"><span class="lights"><i></i><i></i><i></i></span>健康检查命令</div>
+                <span class="term-action">PREVIEW</span>
+              </div>
+              <pre class="command-box" id="healthCommand"></pre>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-artifacts" aria-label="运行产物">
+        <section class="panel wide-panel">
+          <div class="panel-head">
+            <h2 class="panel-title">产物</h2>
+            <button class="btn compact" id="refreshRuns" type="button">刷新</button>
+          </div>
+          <div class="panel-body">
+            <div class="artifact-list" id="artifactList">
+              <div class="empty-state">
+                <strong>暂无本地运行记录</strong>
+                <span>从这个控制台启动的运行会显示在这里。</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>

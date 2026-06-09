@@ -6,13 +6,22 @@
 from __future__ import annotations
 
 import os
+import sys
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .errors import ConfigError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+def _project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
+PROJECT_ROOT = _project_root()
 SUPPORTED_EXPORT_TARGETS = ("sub2api", "cpa")
 
 
@@ -44,6 +53,40 @@ def env_first(*names: str, default: str = "") -> str:
         if value is not None and str(value).strip() != "":
             return str(value).strip()
     return default
+
+
+def normalize_proxy_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        return "http://" + raw
+    return raw
+
+
+def system_proxy_url() -> str:
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        return ""
+    for key in ("https", "http", "all"):
+        value = normalize_proxy_url(proxies.get(key))
+        if value:
+            return value
+    return ""
+
+
+def resolve_proxy(value: Any = "", *, no_proxy: bool = False) -> str:
+    if no_proxy:
+        return ""
+    explicit = normalize_proxy_url(value)
+    if explicit:
+        return explicit
+    env_value = env_first("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+    env_proxy = normalize_proxy_url(env_value)
+    if env_proxy:
+        return env_proxy
+    return system_proxy_url()
 
 
 def parse_int(value: Any, default: int, *, minimum: int | None = None) -> int:
@@ -141,7 +184,7 @@ class RuntimeConfig:
     def from_env_and_args(cls, args: Any) -> "RuntimeConfig":
         load_dotenv()
         artifact = getattr(args, "artifact_dir", None) or env_first("ARTIFACT_DIR", default=str(PROJECT_ROOT / "artifacts" / "idp_codex"))
-        proxy = getattr(args, "proxy", None) or env_first("HTTPS_PROXY", "HTTP_PROXY", default="")
+        proxy = resolve_proxy(getattr(args, "proxy", None), no_proxy=bool(getattr(args, "no_proxy", False)))
         raw_export_targets = getattr(args, "export_targets", None)
         if raw_export_targets is None:
             raw_export_targets = env_first("EXPORT_TARGETS", default="")
@@ -174,7 +217,7 @@ class RuntimeConfig:
             cpa_note=getattr(args, "cpa_note", None) or env_first("CPA_NOTE", default="Idp Team Automation"),
             artifact_dir=(PROJECT_ROOT / artifact) if not str(artifact).startswith("/") else Path(artifact),
             timeout=parse_float(getattr(args, "timeout", None) or env_first("REQUEST_TIMEOUT", default="30"), 30.0, minimum=1.0),
-            proxy="" if getattr(args, "no_proxy", False) else proxy,
+            proxy=proxy,
             export_sub2api="sub2api" in targets,
         )
         return cfg

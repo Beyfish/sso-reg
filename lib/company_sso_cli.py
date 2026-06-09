@@ -18,7 +18,7 @@ from .cli import _build_export_record, _export_record, _write_json
 from .codex_oauth import generate_oauth_start, public_token_result
 from .company_account import CompanyAccount, generate_dev_account
 from .company_sso_flow import CompanySSOHttpFlow
-from .config import PROJECT_ROOT, RuntimeConfig, env_first, load_dotenv, normalize_export_targets, parse_float, parse_int
+from .config import PROJECT_ROOT, RuntimeConfig, env_first, load_dotenv, normalize_export_targets, parse_float, parse_int, resolve_proxy
 from .errors import ConfigError, IdpTeamAutomationError, OAuthFlowError
 from .logging_utils import JsonlLogger, redact, utc_now_iso
 
@@ -39,8 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="公司 SSO 员工注册 -> Codex OAuth refresh token -> 导出目标推送")
     parser.add_argument("--sso-domain", help="公司 SSO 允许域名，例如 sso.company.test")
 
-    parser.add_argument("--dev-generate", action="store_true", help="开发模式：按 seed 生成测试员工账号")
-    parser.add_argument("--email-domain", help="开发模式员工邮箱后缀，例如 company.test")
+    parser.add_argument("--dev-generate", action="store_true", help="开发模式：按 seed 生成测试员工账号；未传员工邮箱/密码时会自动启用")
+    parser.add_argument("--email-domain", help="开发模式员工邮箱后缀，例如 company.test；不填则从 --sso-domain 推断")
     parser.add_argument("--seed", default="", help="开发模式确定性 seed")
     parser.add_argument("--password-length", default="16", help="开发模式密码长度，最小 12")
 
@@ -105,6 +105,14 @@ def _looks_like_email(value: str) -> bool:
     return bool(local and sep and domain and "." in domain and not domain.startswith(".") and not domain.endswith("."))
 
 
+def _domain_from_sso_domain(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlparse(raw if "://" in raw else "//" + raw)
+    return str(parsed.hostname or "").strip().lower().rstrip(".")
+
+
 def _explicit_account_from_args(args: argparse.Namespace) -> CompanyAccount:
     email = str(args.email or "").strip()
     password = str(args.password or "")
@@ -132,10 +140,11 @@ def _explicit_account_from_args(args: argparse.Namespace) -> CompanyAccount:
 
 
 def _account_from_args(args: argparse.Namespace) -> CompanyAccount:
-    if args.dev_generate:
-        email_domain = str(args.email_domain or "").strip()
+    has_explicit_employee_input = bool(str(args.email or "").strip() or str(args.password or ""))
+    if args.dev_generate or not has_explicit_employee_input:
+        email_domain = str(args.email_domain or "").strip() or _domain_from_sso_domain(str(args.sso_domain or ""))
         if not email_domain:
-            raise ConfigError("开发模式缺少 --email-domain", stage="config")
+            raise ConfigError("开发模式缺少 --email-domain，且无法从 --sso-domain 推断", stage="config")
         try:
             return generate_dev_account(
                 email_domain=email_domain,
@@ -153,7 +162,7 @@ def _runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
     if raw_export_targets is None:
         raw_export_targets = env_first("EXPORT_TARGETS", default="")
     targets = normalize_export_targets(raw_export_targets or None, no_sub2api=bool(args.no_sub2api))
-    proxy = "" if args.no_proxy else (args.proxy or env_first("HTTPS_PROXY", "HTTP_PROXY", default=""))
+    proxy = resolve_proxy(args.proxy, no_proxy=bool(args.no_proxy))
     artifact_dir = _resolve_artifact_dir(args.artifact_dir, default=env_first("ARTIFACT_DIR", default=""))
     return RuntimeConfig(
         codex_client_id=args.codex_client_id or env_first("CODEX_CLIENT_ID", default="app_EMoamEEZ73f0CkXaXp7hrann"),
